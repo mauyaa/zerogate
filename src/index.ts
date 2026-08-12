@@ -46,6 +46,7 @@ export {
 } from "./core/define-effect.js";
 
 export {
+  DEFAULT_POLICY_VERSION,
   TransactionEngine,
   type RunInput,
   type TransactionResult,

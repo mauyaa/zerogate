@@ -78,7 +78,7 @@ export class PostgresEventLedger implements EventLedger {
       this.#pool = options.pool;
     } else {
       const config: PoolConfig = {
-        application_name: options.applicationName ?? "zerogate-m1"
+        application_name: options.applicationName ?? "zerogate"
       };
       if (options.connectionString !== undefined) {
         config.connectionString = options.connectionString;
@@ -89,7 +89,7 @@ export class PostgresEventLedger implements EventLedger {
 
   public async append(input: AppendEventInput): Promise<StoredLedgerEvent> {
     const eventId = input.id ?? crypto.randomUUID();
-    const source = input.source ?? "urn:zerogate:m1";
+    const source = input.source ?? "urn:zerogate";
     let stableTime = input.time === undefined ? undefined : canonicalEventTime(input.time);
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {

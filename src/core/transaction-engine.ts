@@ -80,7 +80,16 @@ export interface RunInput<TInput> {
   limits?: Partial<IntentLimits>;
   /** Transaction lifetime. Defaults to 900 seconds. */
   ttlSeconds?: number;
+  /**
+   * Identifies the approval policy this transaction was admitted under. It is
+   * bound into the approval and recorded in the receipt, so set it when your
+   * policy is not the built-in single-use payload-bound mandate.
+   */
+  policyVersion?: string;
 }
+
+/** The policy the built-in {@link ApprovalAuthority} implements. */
+export const DEFAULT_POLICY_VERSION = "policy.human-approval.v1";
 
 const TERMINAL_TRANSACTION_STATES = new Set<TransactionState>([
   "VERIFIED_COMMITTED",
@@ -165,7 +174,7 @@ export class TransactionEngine<
     const transactionId = randomUUID();
     const actionId = randomUUID();
     const logicalOperationId = `zg:${transactionId}:${actionId}:forward`;
-    const policyVersion = "policy.m1.human-approval.v1";
+    const policyVersion = input.policyVersion ?? DEFAULT_POLICY_VERSION;
     const createdAt = new Date();
     const ttlSeconds = input.ttlSeconds ?? 900;
     const limits: IntentLimits = {

@@ -274,7 +274,7 @@ test("an approval bound to a different payload is refused before dispatch", asyn
     contractDigest: "2".repeat(64),
     resourceWitnessHash: "3".repeat(64),
     limitsHash: "4".repeat(64),
-    policyVersion: "policy.m1.human-approval.v1",
+    policyVersion: "policy.human-approval.v1",
     ttlSeconds: 300
   });
 

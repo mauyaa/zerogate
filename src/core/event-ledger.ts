@@ -80,7 +80,7 @@ export class InMemoryEventLedger implements EventLedger {
   public async append(input: AppendEventInput): Promise<StoredLedgerEvent> {
     const eventId = input.id ?? randomUUID();
     const existing = this.#events.find((event) => event.id === eventId);
-    const source = input.source ?? "urn:zerogate:m1";
+    const source = input.source ?? "urn:zerogate";
     const time = canonicalEventTime(input.time ?? existing?.time);
     const data = structuredClone(input.data);
     const appendFingerprint = sha256(
