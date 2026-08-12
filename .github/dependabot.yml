@@ -1,14 +1,31 @@
 version: 2
+
+# Minor and patch updates are grouped into one pull request per package, because
+# reviewing them individually is busywork. Major updates deliberately arrive on
+# their own: grouping them guaranteed a pull request that could only fail, since
+# a single PR would try to cross every breaking boundary at once.
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
       day: monday
+      time: "05:17"
     groups:
-      core-dependencies:
-        patterns:
-          - "*"
+      core-safe-updates:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Held at the version the toolchain actually supports:
+      # typescript-eslint 8.x does not support ESLint 10, and its rules crash on
+      # that AST. Revisit when typescript-eslint ships v10 support.
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+      # @types/node tracks the runtime declared in `engines`, not the newest tag.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm
@@ -16,10 +33,16 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "05:23"
     groups:
-      site-dependencies:
-        patterns:
-          - "*"
+      site-safe-updates:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
@@ -27,8 +50,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "05:29"
     groups:
       workflow-actions:
-        patterns:
-          - "*"
+        patterns: ["*"]
     open-pull-requests-limit: 5

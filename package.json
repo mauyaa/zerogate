@@ -66,7 +66,7 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "pg": "^8.16.0"
+    "pg": "8.16.0"
   },
   "peerDependenciesMeta": {
     "pg": {
@@ -76,12 +76,12 @@
   "devDependencies": {
     "@eslint/js": "9.39.0",
     "@types/node": "22.15.0",
-    "@types/pg": "8.15.5",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
+    "@types/pg": "8.21.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "eslint": "9.39.0",
-    "pg": "8.22.0",
+    "pg": "8.23.0",
     "typescript": "5.8.3",
-    "typescript-eslint": "^8.67.0"
+    "typescript-eslint": "8.67.0"
   }
 }
