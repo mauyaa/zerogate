@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.zerogate.dev/effect-contract/1.0.0",
+  "title": "ZeroGate Effect Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "effects.zerogate.dev/v1alpha1" },
+    "kind": { "const": "EffectContract" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "provider", "operation"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9.-]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9.-]+)?$" },
+        "provider": { "type": "string", "minLength": 1 },
+        "operation": { "type": "string", "minLength": 1 },
+        "providerApiVersion": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "status": { "type": "string", "enum": ["experimental", "verified", "production", "assured", "quarantined"] }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputSchema", "effect", "preflight", "idempotency", "dispatch", "verification", "evidence"],
+      "properties": {
+        "inputSchema": { "type": "object" },
+        "canonicalization": { "type": "object" },
+        "effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "safetyGrade", "resourceType"],
+          "properties": {
+            "class": { "type": "string", "enum": ["read_only", "reversible", "compensatable", "irreversible"] },
+            "safetyGrade": { "type": "string", "enum": ["OBSERVE_ONLY", "BOUNDED_WRITE", "RETRY_SAFE", "RECOVERABLE", "STAGED_IRREVERSIBLE", "IRREVERSIBLE_ACCEPTED", "UNSUPPORTED"] },
+            "resourceType": { "type": "string" },
+            "materialFields": { "type": "array", "items": { "type": "string" } },
+            "risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+          }
+        },
+        "preflight": {
+          "type": "object",
+          "required": ["witness", "preview"],
+          "properties": {
+            "witness": { "type": "object", "required": ["strategy", "strength"], "properties": {
+              "strategy": { "type": "string" },
+              "strength": { "type": "string", "enum": ["strong", "medium", "weak", "none"] }
+            } },
+            "preview": { "type": "object" },
+            "preconditions": { "type": "array", "items": { "type": "object" } },
+            "expiresAfterSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "idempotency": {
+          "type": "object",
+          "required": ["strategy"],
+          "properties": {
+            "strategy": { "type": "string", "enum": ["provider_native", "provider_request_id", "resource_key", "read_before_write", "zerogate_registry", "non_idempotent"] },
+            "keyTemplate": { "type": "string" },
+            "providerRetentionSeconds": { "type": "integer", "minimum": 0 },
+            "payloadEqualityRequired": { "type": "boolean", "default": true }
+          }
+        },
+        "dispatch": { "type": "object", "required": ["method"], "properties": {
+          "method": { "type": "string" },
+          "timeoutSeconds": { "type": "integer", "minimum": 1 },
+          "retryPolicy": { "type": "object" }
+        } },
+        "verification": { "type": "object", "required": ["required", "strategy"], "properties": {
+          "required": { "type": "boolean" },
+          "strategy": { "type": "string" },
+          "postconditions": { "type": "array", "items": { "type": "object" } }
+        } },
+        "reconciliation": { "type": "object", "properties": {
+          "strategies": { "type": "array", "items": { "type": "string" } },
+          "deadlineSeconds": { "type": "integer", "minimum": 1 }
+        } },
+        "recovery": { "type": "object", "properties": {
+          "mode": { "type": "string", "enum": ["none", "exact_restore", "semantic_inverse", "containment", "manual"] },
+          "operation": { "type": "string" },
+          "preconditions": { "type": "array", "items": { "type": "object" } },
+          "verification": { "type": "object" }
+        } },
+        "release": { "type": "object", "properties": {
+          "mode": { "type": "string", "enum": ["immediate_explicit", "deferred_outbox", "draft_only", "reservation_then_finalize", "escrow_or_hold", "prohibited"] },
+          "barriers": { "type": "array", "items": { "type": "string" } }
+        } },
+        "evidence": { "type": "object", "required": ["storageMode", "redact"], "properties": {
+          "storageMode": { "type": "string", "enum": ["metadata_only", "structured_diff", "encrypted_evidence", "customer_held"] },
+          "redact": { "type": "array", "items": { "type": "string" } },
+          "retainSeconds": { "type": "integer", "minimum": 0 }
+        } }
+      }
+    }
+  }
+}

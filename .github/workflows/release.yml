@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Validate, attest, and publish release evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    services:
+      postgres:
+        image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: zerogate_release
+          POSTGRES_DB: zerogate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zerogate"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      ZEROGATE_TEST_ADMIN_DATABASE_URL: postgresql://postgres:zerogate_release@127.0.0.1:5432/zerogate
+      ZEROGATE_DATABASE_URL: postgresql://postgres:zerogate_release@127.0.0.1:5432/zerogate
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install core dependencies
+        run: npm ci
+      - name: Apply the checksum-locked migrations
+        run: npm run db:migrate
+      - name: Validate the core package
+        run: npm run validate
+      - name: Run the PostgreSQL integration proof
+        run: npm run test:postgres
+      - name: Install site dependencies
+        working-directory: site
+        run: npm ci
+      - name: Validate the site
+        working-directory: site
+        run: npm run validate
+      - name: Build the release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          git archive --format=tar.gz --output="release/zerogate-${GITHUB_REF_NAME}-source.tar.gz" HEAD
+          npm pack --pack-destination release
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/zerogate.spdx.json
+          artifact-name: zerogate.spdx.json
+          dependency-snapshot: true
+          upload-artifact: false
+          upload-release-assets: false
+          syft-version: v1.51.0
+      - name: Generate release checksums
+        run: sha256sum release/* > release/SHA256SUMS
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: release/*
+      - name: Upload the release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zerogate-${{ github.ref_name }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" release/*
+          --verify-tag
+          --title "ZeroGate ${GITHUB_REF_NAME}"
+          --generate-notes

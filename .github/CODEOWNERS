@@ -1,0 +1,11 @@
+# Default ownership.
+* @mauyaa
+
+# Transaction semantics, persistence, published schemas, and delivery policy
+# require explicit maintainer review even once other areas have reviewers.
+/src/core/ @mauyaa
+/src/cli/ @mauyaa
+/src/postgres/ @mauyaa
+/schemas/ @mauyaa
+/migrations/ @mauyaa
+/.github/workflows/ @mauyaa

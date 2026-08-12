@@ -1,0 +1,81 @@
+{
+  "apiVersion": "effects.zerogate.dev/v1alpha1",
+  "kind": "EffectContract",
+  "metadata": {
+    "name": "example.documents.publish",
+    "version": "1.0.0",
+    "provider": "example-rest-service",
+    "operation": "documents.publish",
+    "status": "example"
+  },
+  "spec": {
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentId", "status", "tags"],
+      "properties": {
+        "documentId": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["draft", "published", "archived"] },
+        "tags": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "canonicalization": {
+      "semanticNormalizationBeforeJcs": ["unicode_nfc", "tag_deduplication", "tag_sort"],
+      "hashEncoding": "RFC8785-JCS",
+      "rejectNegativeZero": true
+    },
+    "effect": {
+      "class": "compensatable",
+      "safetyGrade": "RECOVERABLE",
+      "resourceType": "example.document",
+      "materialFields": ["status", "tags"],
+      "risk": "low"
+    },
+    "preflight": {
+      "witness": {
+        "strategy": "version_plus_updated_at_plus_state_hash",
+        "strength": "medium"
+      },
+      "preview": { "strategy": "field_diff" },
+      "preconditions": [
+        { "kind": "resource_exists" },
+        { "kind": "fields_unchanged_since_witness" }
+      ],
+      "expiresAfterSeconds": 300
+    },
+    "idempotency": {
+      "strategy": "provider_idempotency_key",
+      "keyTemplate": "{{logicalOperationId}}",
+      "payloadEqualityRequired": true
+    },
+    "dispatch": {
+      "method": "PATCH /documents/{documentId}",
+      "conditionalHeader": "If-Match",
+      "timeoutSeconds": 15,
+      "retryPolicy": {
+        "onDefinitiveNoDispatch": "retry",
+        "onUnknown": "reconcile_before_retry"
+      }
+    },
+    "verification": {
+      "required": true,
+      "strategy": "fetch_and_compare_material_fields",
+      "postconditions": [{ "kind": "patch_applied" }]
+    },
+    "reconciliation": {
+      "strategies": ["provider_operation_lookup_by_idempotency_key"],
+      "deadlineSeconds": 300
+    },
+    "recovery": {
+      "mode": "exact_restore",
+      "operation": "example.documents.restore_owned_fields",
+      "preconditions": [{ "kind": "current_fields_equal_forward_result" }],
+      "verification": { "strategy": "fetch_and_compare_recovery_postcondition" }
+    },
+    "evidence": {
+      "storageMode": "structured_diff",
+      "redact": [],
+      "retainSeconds": 2592000
+    }
+  }
+}

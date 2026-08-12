@@ -1,0 +1,46 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Local tool state and caches
+.cache/
+.npm/
+.pnpm-store/
+.turbo/
+.next/
+.vinext/
+.wrangler/
+.scratch/
+outputs/
+work/
+
+# Local runtime data, keys, and environment
+.keys/
+.data/
+.env
+.env.*
+*.pem
+
+# Generated proof artifacts (keep the directory marker)
+artifacts/*.json
+artifacts/*.pem
+!artifacts/.gitkeep
+
+# Local and legacy verification output is evidence for the generating machine,
+# not immutable release provenance.
+verification/
+
+# Backups of nested repository metadata must never be published
+**/.git-backup/
+**/.git.bak/
+**/.git.old/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# local agent and editor tooling
+.claude/

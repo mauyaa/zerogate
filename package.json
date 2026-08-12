@@ -1,0 +1,87 @@
+{
+  "name": "zerogate",
+  "version": "0.3.0",
+  "description": "Find out what happened before retrying: verified execution, reconciliation, and signed receipts for side effects that leave your process",
+  "keywords": [
+    "idempotency",
+    "reconciliation",
+    "transaction",
+    "saga",
+    "compensation",
+    "side-effects",
+    "exactly-once",
+    "receipts",
+    "agent-safety"
+  ],
+  "license": "Apache-2.0",
+  "author": "mauyaa",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mauyaa/zerogate.git"
+  },
+  "homepage": "https://github.com/mauyaa/zerogate#readme",
+  "bugs": {
+    "url": "https://github.com/mauyaa/zerogate/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/src/postgres/event-ledger.d.ts",
+      "import": "./dist/src/postgres/event-ledger.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "zerogate": "./bin/zerogate.js"
+  },
+  "files": [
+    "bin",
+    "dist/src",
+    "migrations",
+    "schemas",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "pretest": "node scripts/clean.mjs",
+    "test": "tsc -p tsconfig.json && node --test \"dist/tests/*.test.js\"",
+    "test:postgres": "tsc -p tsconfig.json && node --test \"dist/tests/postgres-event-ledger.test.js\"",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "node scripts/migrate.mjs",
+    "validate": "npm run lint && npm run typecheck && npm run test && npm run build && npm run smoke",
+    "smoke": "node scripts/smoke-package.mjs",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "pg": "^8.16.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.0",
+    "@types/node": "22.15.0",
+    "@types/pg": "8.15.5",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "9.39.0",
+    "pg": "8.22.0",
+    "typescript": "5.8.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}
