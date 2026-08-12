@@ -51,6 +51,16 @@ export interface PostgresEventLedgerOptions {
   pool?: PgPool;
   connectionString?: string;
   applicationName?: string;
+  /**
+   * Called when an idle pooled connection fails — a failover, a server restart,
+   * an administrator terminating the backend. The pool discards that client and
+   * carries on, so this is for observability, not recovery.
+   *
+   * Only used for a pool this ledger creates. A pool you pass in keeps whatever
+   * error handling you gave it, and **must** have some: without a listener,
+   * Node treats a pool error as an unhandled `error` event and exits.
+   */
+  onPoolError?: (error: Error) => void;
 }
 
 /**
@@ -83,7 +93,14 @@ export class PostgresEventLedger implements EventLedger {
       if (options.connectionString !== undefined) {
         config.connectionString = options.connectionString;
       }
-      this.#pool = new Pool(config);
+      const pool = new Pool(config);
+      // Without this listener an idle-client failure is an unhandled 'error'
+      // event, which exits the host process. A failover must not take the
+      // application down; the pool discards the client and continues.
+      pool.on("error", (error: Error) => {
+        options.onPoolError?.(error);
+      });
+      this.#pool = pool;
     }
   }
 

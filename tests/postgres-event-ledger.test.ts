@@ -159,11 +159,26 @@ test(
   async () => {
     assert.ok(adminDatabaseUrl !== undefined);
 
-    const controlPool = new Pool({
-      connectionString: adminDatabaseUrl,
-      application_name: "zerogate-ledger-test-control",
-      max: 4
-    });
+    /**
+     * Teardown drops the temporary database `WITH (FORCE)`, which terminates
+     * any connection still open to it. pg surfaces that on the pool's `error`
+     * event, and with no listener Node treats it as an unhandled exception and
+     * fails the test — which is exactly how this suite went flaky in CI. Every
+     * pool created here gets a listener.
+     */
+    const poolErrors: Error[] = [];
+    const track = (pool: PgPool): PgPool => {
+      pool.on("error", (error: Error) => poolErrors.push(error));
+      return pool;
+    };
+
+    const controlPool = track(
+      new Pool({
+        connectionString: adminDatabaseUrl,
+        application_name: "zerogate-ledger-test-control",
+        max: 4
+      })
+    );
     const databaseName = `zg_test_${randomUUID().replaceAll("-", "")}`;
     const databaseIdentifier = quoteIdentifier(databaseName);
     const roleName = `zg_test_${randomUUID().replaceAll("-", "")}`;
@@ -179,11 +194,13 @@ test(
       await controlPool.query(`CREATE DATABASE ${databaseIdentifier}`);
       databaseCreated = true;
       const isolatedDatabaseUrl = databaseConnectionString(adminDatabaseUrl, databaseName);
-      const isolatedAdminPool = new Pool({
-        connectionString: isolatedDatabaseUrl,
-        application_name: "zerogate-ledger-test-admin",
-        max: 4
-      });
+      const isolatedAdminPool = track(
+        new Pool({
+          connectionString: isolatedDatabaseUrl,
+          application_name: "zerogate-ledger-test-admin",
+          max: 4
+        })
+      );
       databasePool = isolatedAdminPool;
       await migrate(isolatedAdminPool);
 
@@ -233,15 +250,17 @@ test(
         canReplicate: false
       });
 
-      appPool = new Pool({
-        connectionString: appConnectionString(
-          isolatedDatabaseUrl,
-          roleName,
-          rolePassword
-        ),
-        application_name: "zerogate-ledger-test-app",
-        max: 12
-      });
+      appPool = track(
+        new Pool({
+          connectionString: appConnectionString(
+            isolatedDatabaseUrl,
+            roleName,
+            rolePassword
+          ),
+          application_name: "zerogate-ledger-test-app",
+          max: 12
+        })
+      );
 
       const tenantA = `tenant_${randomUUID()}`;
       const tenantB = `tenant_${randomUUID()}`;
@@ -457,6 +476,17 @@ test(
         ? primaryError
         : new Error(`The test body threw a non-Error value: ${JSON.stringify(primaryError)}`);
     }
+
+    // Connections torn down by the forced database drop are expected. Anything
+    // else means a pooled connection failed during the test itself.
+    const unexpectedPoolErrors = poolErrors.filter(
+      (error) => !/terminating connection due to administrator command|database .* does not exist/i.test(error.message)
+    );
+    assert.deepEqual(
+      unexpectedPoolErrors.map((error) => error.message),
+      [],
+      "a pooled connection failed for a reason unrelated to teardown"
+    );
     if (cleanupErrors.length > 0) {
       throw new AggregateError(cleanupErrors, "PostgreSQL integration-test cleanup failed");
     }
