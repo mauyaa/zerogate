@@ -26,6 +26,11 @@ updates:
       # @types/node tracks the runtime declared in `engines`, not the newest tag.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native port. Moving to it is a deliberate migration
+      # that has to be validated against typescript-eslint and the Next.js
+      # toolchain together, not accepted as a routine bump.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm

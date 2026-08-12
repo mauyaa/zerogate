@@ -140,7 +140,23 @@ verifyEventChain(covered).root === receipt.integrity.eventChainRoot;
 
 **Both checks are required.** A valid signature alone proves the body was signed by that key. Re-deriving the chain root proves the receipt describes the history it claims to.
 
-By default the engine generates an ephemeral keypair that dies with the process — internally consistent and permanently unverifiable. Supply a `ReceiptSigner` built from a retained key for anything you intend to audit.
+By default the engine generates an ephemeral keypair that dies with the process — internally consistent and permanently unverifiable. Supply a retained key for anything you intend to audit:
+
+```ts
+import { ReceiptSigner, TransactionEngine } from "zerogate";
+import { readFileSync } from "node:fs";
+
+const engine = new TransactionEngine({
+  adapter: publishDocument,
+  receiptSigner: ReceiptSigner.fromPem(readFileSync(process.env.RECEIPT_KEY_PATH, "utf8"))
+});
+```
+
+### Credentials never reach a receipt
+
+If a material field's value has the shape of a credential — a PEM private key, a GitHub or npm token, an AWS key ID, a JWT, a bearer token — the transaction is refused during preflight, before anything is dispatched, and the error names the field and tells you to add it to `redactFields`.
+
+The check matches credential *shapes* only, never words like "password" or "secret", so a document titled "Password reset" is ordinary content.
 
 ---
 
@@ -200,6 +216,7 @@ npx zerogate keys new [--out <dir>] [--name <name>]
 - **Compensation is a forward write.** Refused whenever a material field no longer matches the forward result.
 - **One action per transaction.** Multi-action transactions, dependency ordering, and partial-commit release conditions are modelled in the state machine but not implemented.
 - **Approvals are tokens, not an approval service.** `ApprovalAuthority` issues and consumes single-use payload-bound mandates. It asks no human anything.
+- **Replay protection for approvals is process-local.** Consumed nonces are held in memory by the `ApprovalAuthority` instance, so a restart, or a second instance, will accept a mandate that was already used. Back it with shared storage before issuing approvals across processes.
 - **The freshness check is not atomic.** It narrows the window between approval and mutation without closing it. Use a provider-side conditional write where one exists.
 - **The default ledger does not survive a restart.**
 - **Ephemeral signing keys make receipts unverifiable later.**

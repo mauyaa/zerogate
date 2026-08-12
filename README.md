@@ -35,6 +35,7 @@ result.forwardDispatchCount;     // 1 — even if the acknowledgement was lost
 | Verification, not optimism | A provider's success response is evidence. Authoritative state is proof. |
 | Compensation that refuses | If the record no longer matches what your effect produced, it will not overwrite it. |
 | Signed receipts | Ed25519 over a hash-linked event chain, verifiable offline by a third party. |
+| Credentials stay out | A credential-shaped value in a recorded field refuses the transaction before dispatch. |
 | Honest unknowns | When the provider cannot say what happened, you get `UNKNOWN` — not a guess. |
 
 ## Defining an effect
@@ -140,7 +141,7 @@ Stated plainly, because a safety library that oversells itself is worse than non
 - **Reconciliation is only as good as your provider's evidence.** See the requirements above.
 - **Compensation is not a rollback.** It is a second, forward, conditional write. It is refused when the record has moved on.
 - **One action per transaction.** Multi-action transactions are not implemented.
-- **Approvals are payload-bound tokens, not a human approval service.** Wiring them to a real approver is your responsibility.
+- **Approvals are payload-bound tokens, not a human approval service.** Wiring them to a real approver is your responsibility, and replay protection is process-local until you back the nonce store with shared storage.
 
 ## Development
 

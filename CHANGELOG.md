@@ -15,6 +15,7 @@ First release published to npm, and the first release with a general-purpose API
 - A `zerogate` CLI: `receipt verify`, `contract digest`, and `keys new`.
 - `ABORTED` as a terminal outcome. A stale witness now produces a signed receipt proving nothing was dispatched, instead of throwing.
 - `providerRequestIds` on `Reconciliation`, so the request that actually committed is recorded in the receipt.
+- A credential guard: a value shaped like a PEM private key, GitHub or npm token, AWS key ID, JWT, or bearer token in a recorded field refuses the transaction during preflight, before anything is dispatched. It matches shapes only, so prose mentioning "password" is never blocked.
 - Schema tests that validate real engine output against the published JSON Schemas in `schemas/`, so those schemas cannot drift from what the engine emits.
 - A package smoke test that packs the tarball npm would publish, installs it into a scratch project, and uses both the library and the installed binary.
 
@@ -26,6 +27,8 @@ First release published to npm, and the first release with a general-purpose API
 
 ### Removed
 
+- `redactPaths`, which was exported but wired into nothing. Redaction happens through `redactFields`, which hashes the value so the diff stays verifiable.
+- `assertTransactionTransition`, `assertActionTransition`, `sha256`, `toJsonValue`, and `canonicalEventTime` from the public API. They are internals, and a smaller surface is a simpler one.
 - The fixed set of demo scenarios and the simulator hooks the engine reached into to stage them. Outcomes are now produced by providers genuinely misbehaving, which is also how they are tested.
 - The bespoke GitHub adapter. Its semantics are now general, in `defineEffect`.
 - A generic SDK and gateway proxy that failed closed without doing anything.

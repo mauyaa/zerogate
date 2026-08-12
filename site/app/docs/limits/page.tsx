@@ -30,6 +30,10 @@ const limits = [
     body: "ApprovalAuthority issues and consumes single-use, payload-bound mandates. It does not ask a human anything. Connecting it to a real approver, with a real interface and a real audit trail, is your responsibility. By default the engine self-issues an approval, which is appropriate for tests and for callers that gathered consent out of band.",
   },
   {
+    title: "Replay protection for approvals is process-local",
+    body: "Consumed nonces are held in memory by the ApprovalAuthority instance. A restart, or a second instance running alongside the first, will accept a mandate that has already been used. Back the nonce store with shared storage before issuing approvals across processes.",
+  },
+  {
     title: "The freshness check is not atomic",
     body: "State is re-read immediately before dispatch, which narrows the window between approval and mutation but does not close it. Where the provider supports a conditional write — an ETag, an If-Match, a version precondition — use it in dispatch, and the provider closes the window properly.",
   },

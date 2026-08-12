@@ -139,6 +139,25 @@ test("typography and buttons follow the design system", async () => {
   for (const [, weight] of css.matchAll(/font-weight:\s*(\d{3})/g)) {
     assert.ok(Number(weight) <= 600, `font-weight ${weight} exceeds the 600 ceiling`);
   }
+  // `strong` and `b` default to 700 in every browser, so the ceiling only holds
+  // if the stylesheet overrides them. This was rendering at 700 in production.
+  assert.match(
+    css,
+    /^strong,\s*\nb\s*\{[^}]*font-weight:\s*600/ms,
+    "strong/b must be pinned to 600 or the browser default of 700 leaks through"
+  );
+  // Section-head eyebrows must keep their own size: a bare `.section-head p`
+  // rule out-specifies `.eyebrow` and silently rendered it at body size.
+  assert.match(
+    css,
+    /\.section-head p:not\(\.eyebrow\)/,
+    "scope .section-head p so it cannot override .eyebrow"
+  );
+  assert.match(
+    css,
+    /\.desktop-nav a:not\(\.button\)/,
+    "scope .desktop-nav a so it cannot override .button--primary"
+  );
   // Headings carry negative tracking.
   assert.match(css, /h1\s*\{[^}]*letter-spacing:\s*-0?\.03em/s);
   // The eyebrow is the signature move and must stay accent-coloured and spaced.

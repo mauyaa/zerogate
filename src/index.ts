@@ -8,28 +8,30 @@
  * evidence, verify against authoritative state, compensate only when that is
  * provably safe, and sign a receipt for the whole thing.
  *
+ * Two things do the work: {@link defineEffect} describes one operation, and
+ * {@link TransactionEngine} runs it. Everything else below is supporting cast.
+ *
  * @example
  * ```ts
  * import { TransactionEngine, defineEffect } from "zerogate";
  *
  * const engine = new TransactionEngine({ adapter: defineEffect({ ... }) });
+ *
  * const result = await engine.run({
- *   input: { documentId: "doc_1", status: "published", tags: ["release"] },
+ *   input: { documentId: "doc_1", status: "published" },
  *   actor: { principalId: "u_1", agentId: "publisher", agentVersion: "1.0.0" },
  *   purpose: "Publish the release notes",
- *   finalize: async () => notifySubscribers()
+ *   finalize: () => notifySubscribers()
  * });
  *
- * result.transaction.state; // VERIFIED_COMMITTED | VERIFIED_COMPENSATED | ...
+ * result.transaction.state;      // VERIFIED_COMMITTED | VERIFIED_COMPENSATED | ...
+ * result.forwardDispatchCount;   // 1, even if the acknowledgement was lost
  * ```
  */
 
-export {
-  TransactionEngine,
-  type RunInput,
-  type TransactionResult,
-  type WitnessSummary
-} from "./core/transaction-engine.js";
+/* -------------------------------------------------------------------------- */
+/* The two things you need                                                    */
+/* -------------------------------------------------------------------------- */
 
 export {
   defineEffect,
@@ -43,15 +45,16 @@ export {
   type ProviderState
 } from "./core/define-effect.js";
 
-export type {
-  AnyEffectAdapter,
-  Awaitable,
-  DispatchRequest,
-  EffectAdapter,
-  Preflight,
-  PreflightEvaluation,
-  RecoveryDispatchRequest
-} from "./core/adapter.js";
+export {
+  TransactionEngine,
+  type RunInput,
+  type TransactionResult,
+  type WitnessSummary
+} from "./core/transaction-engine.js";
+
+/* -------------------------------------------------------------------------- */
+/* Errors your dispatch function throws                                       */
+/* -------------------------------------------------------------------------- */
 
 export {
   ProviderSafeToRetryError,
@@ -60,33 +63,45 @@ export {
   type ErrorCode
 } from "./core/errors.js";
 
+/* -------------------------------------------------------------------------- */
+/* Verifying evidence                                                         */
+/* -------------------------------------------------------------------------- */
+
+export { ReceiptSigner, verifyReceipt } from "./core/receipt.js";
+export { replayProjection, verifyEventChain, type ReplayedProjection } from "./core/event-ledger.js";
+export { KeyStore, type KeyPairPem } from "./core/key-store.js";
+
+/** Canonical hashing (RFC 8785 JCS). Use it to pin a contract digest in a test. */
+export { canonicalize, hashCanonical } from "./core/canonical-json.js";
+
+/* -------------------------------------------------------------------------- */
+/* Persistence and approvals                                                  */
+/* -------------------------------------------------------------------------- */
+
+export {
+  InMemoryEventLedger,
+  type AppendEventInput,
+  type EventLedger
+} from "./core/event-ledger.js";
+
+export { SqliteLedger, type SqliteLedgerAppendResult } from "./core/sqlite-ledger.js";
+
 export {
   ApprovalAuthority,
   type ApprovalClaims,
   type SignedApproval
 } from "./core/approval.js";
 
-export { ReceiptSigner, verifyReceipt } from "./core/receipt.js";
+/* -------------------------------------------------------------------------- */
+/* Types that appear in the signatures above                                  */
+/* -------------------------------------------------------------------------- */
 
-export {
-  InMemoryEventLedger,
-  canonicalEventTime,
-  replayProjection,
-  verifyEventChain,
-  type AppendEventInput,
-  type EventLedger,
-  type ReplayedProjection
-} from "./core/event-ledger.js";
-
-export { SqliteLedger, type SqliteLedgerAppendResult } from "./core/sqlite-ledger.js";
-
-export { KeyStore, type KeyPairPem } from "./core/key-store.js";
-
-export { canonicalize, hashCanonical, sha256, toJsonValue } from "./core/canonical-json.js";
-
-export { containsLikelySecret, redactPaths } from "./core/redaction.js";
-
-export { assertActionTransition, assertTransactionTransition } from "./core/state-machine.js";
+export type {
+  Awaitable,
+  EffectAdapter,
+  Preflight,
+  PreflightEvaluation
+} from "./core/adapter.js";
 
 export type {
   ActionRuntimeRecord,
@@ -96,7 +111,6 @@ export type {
   Finality,
   IntentEnvelope,
   IntentLimits,
-  JsonPrimitive,
   JsonValue,
   MaterialDiff,
   OutcomeClassification,

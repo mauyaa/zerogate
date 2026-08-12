@@ -134,6 +134,13 @@ p {
   color: var(--color-text-secondary);
 }
 
+/* The browser default is 700, which is heavier than this system ever goes. */
+strong,
+b {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
 a {
   color: var(--color-accent);
   text-decoration: none;
@@ -230,7 +237,9 @@ kbd {
   margin-bottom: var(--space-16);
 }
 
-.section-head p {
+/* `:not(.eyebrow)` matters: a bare `.section-head p` rule out-specifies
+   `.eyebrow`, which rendered the eyebrow at body size in every section. */
+.section-head p:not(.eyebrow) {
   font-size: var(--text-lg);
 }
 
@@ -800,11 +809,6 @@ td code {
   background: var(--color-bg-muted);
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-}
-
-.prose strong {
-  color: var(--color-text-primary);
-  font-weight: 600;
 }
 
 .callout {

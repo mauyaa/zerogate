@@ -1,6 +1,7 @@
 import type { Awaitable, EffectAdapter, Preflight, PreflightEvaluation } from "./adapter.js";
 import { hashCanonical, toJsonValue } from "./canonical-json.js";
 import { ZeroGateError } from "./errors.js";
+import { findCredentialShape } from "./secret-guard.js";
 import type {
   DispatchEvidence,
   JsonValue,
@@ -309,7 +310,27 @@ export function defineEffect<TInput, TState extends ProviderState>(
       return { preflight };
     },
 
+    /**
+     * Renders the preview diff for a receipt.
+     *
+     * A credential in a non-redacted field is refused rather than published: a
+     * receipt is meant to be shared, so a token reaching one is disclosed to
+     * everyone who ever reads it. This runs during preflight, before anything
+     * is dispatched, so refusing costs nothing.
+     */
     evidenceDiff(preflight: TPreflight): Array<Record<string, JsonValue>> {
+      for (const change of preflight.diff) {
+        if (redactFields.has(change.field)) continue;
+        const kind = findCredentialShape(change.after) ?? findCredentialShape(change.before);
+        if (kind !== undefined) {
+          throw new ZeroGateError(
+            "UNSUPPORTED",
+            `Field '${change.field}' of '${definition.operation}' looks like a ${kind}, and evidence is not a safe place for one. Add '${change.field}' to redactFields so it is hashed instead of recorded.`,
+            false,
+            { field: change.field, credentialKind: kind }
+          );
+        }
+      }
       return preflight.diff.map((change) =>
         redactFields.has(change.field)
           ? {

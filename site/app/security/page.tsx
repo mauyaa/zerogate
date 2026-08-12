@@ -22,8 +22,8 @@ const properties = [
     body: "Ed25519 over a canonical body. Verification requires only the receipt, the events, and a public key, so an auditor never has to trust the runtime that produced them.",
   },
   {
-    title: "Secrets are kept out of evidence",
-    body: "Fields declared as redacted are hashed rather than recorded, and a secret-shaped-value check guards against accidental inclusion. Provider results are returned to the caller but never placed in a receipt.",
+    title: "Credentials cannot reach a receipt",
+    body: "Fields declared as redacted are hashed rather than recorded. Beyond that, a value shaped like a credential — a PEM private key, a GitHub or npm token, an AWS key ID, a JWT, a bearer token — refuses the transaction during preflight, before anything is dispatched, and the error names the field. The check matches shapes only, never the words 'password' or 'secret', so ordinary prose is never blocked. Provider results are returned to the caller and never placed in a receipt.",
   },
   {
     title: "Canonicalisation is strict",
