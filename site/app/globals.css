@@ -121,17 +121,21 @@ h2 {
   font-size: clamp(1.625rem, 3vw, var(--text-3xl));
   line-height: 1.15;
   letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 h3 {
   font-size: var(--text-xl);
   line-height: 1.3;
   letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 
 p {
   margin: 0;
   color: var(--color-text-secondary);
+  /* Keeps a single short word from being orphaned on the last line. */
+  text-wrap: pretty;
 }
 
 /* The browser default is 700, which is heavier than this system ever goes. */
