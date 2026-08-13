@@ -13,7 +13,7 @@ npm install zerogate
 ```
 
 ```ts
-import { TransactionEngine, defineEffect } from "zerogate";
+import { TransactionEngine } from "zerogate";
 
 const engine = new TransactionEngine({ adapter: publishDocument });
 
@@ -24,9 +24,12 @@ const result = await engine.run({
   finalize: () => notifySubscribers()   // if this throws, the publish is undone
 });
 
-result.transaction.state;        // VERIFIED_COMMITTED
+result.committed;                // true — verified against authoritative state
 result.forwardDispatchCount;     // 1 — even if the acknowledgement was lost
+result.summary;                  // one line, safe to log, true in every outcome
 ```
+
+**Check `result.committed`.** Every other outcome — including the ones that mean *we cannot tell whether this happened* — returns normally rather than throwing. If you would rather handle one exception, call `assertCommitted(result)`.
 
 ## What you get
 
@@ -48,7 +51,10 @@ You describe one operation. ZeroGate supplies the transaction semantics.
 import { defineEffect, ProviderTimeoutAfterDispatchError } from "zerogate";
 import contract from "./publish.effect.json" with { type: "json" };
 
-export const publishDocument = defineEffect({
+type PublishInput = { documentId: string; status: string; tags: string[] };
+type Document = { status: string; tags: string[]; version: number; updatedAt: string };
+
+export const publishDocument = defineEffect<PublishInput, Document>({
   operation: "docs.publish",
   contract,                                  // its digest goes in every receipt
   materialFields: ["status", "tags"],        // the only fields this effect owns
@@ -64,7 +70,7 @@ export const publishDocument = defineEffect({
         headers: { "idempotency-key": logicalOperationId, "if-match": `"${before.version}"` },
         body: { status: input.status, tags: input.tags }
       });
-      return { providerRequestId: response.headers.get("x-request-id") };
+      return { providerRequestId: response.headers.get("x-request-id") ?? undefined };
     } catch (cause) {
       // The one rule that matters: never guess.
       throw new ProviderTimeoutAfterDispatchError();
@@ -74,13 +80,16 @@ export const publishDocument = defineEffect({
   // "Did my dispatch commit?", answered by the provider — not inferred from state.
   findEvidence: ({ logicalOperationId }) => api.findOperation(logicalOperationId),
 
-  compensate: ({ input, restore, logicalOperationId }) =>
-    api.patch(`/documents/${input.documentId}`, {
+  async compensate({ input, restore, logicalOperationId }) {
+    await api.patch(`/documents/${input.documentId}`, {
       headers: { "idempotency-key": logicalOperationId },
       body: restore
-    })
+    });
+  }
 });
 ```
+
+Write both type arguments — your input, and the provider state you observe. They are what makes `input.documentId` and `state.version` known inside every function above, and `defineEffect` cannot infer them.
 
 Nothing in that file decides when to retry, what to approve, how to hash a payload, or when undoing is safe. Those are transaction concerns, and the engine owns them.
 
@@ -96,16 +105,59 @@ Without one of those, a lost acknowledgement is genuinely unresolvable. ZeroGate
 
 ## Outcomes
 
-Every run ends in one terminal state, each with a signed receipt:
+`run()` returns; it does not throw. Every outcome below — including an unreachable provider and a definition that throws during preflight — ends in one terminal state with a signed receipt.
 
-| State | Meaning |
-|---|---|
-| `VERIFIED_COMMITTED` | The effect happened, exactly once, and authoritative state proves it. |
-| `VERIFIED_COMPENSATED` | The effect happened and was then undone, and state proves both. |
-| `MANUAL_RECOVERY_REQUIRED` | Something is genuinely unresolved. The receipt says exactly what. |
-| `ABORTED` | State moved after approval. Nothing was dispatched. |
-| `PREFLIGHT_FAILED` | The change had no material effect, or a precondition failed. |
-| `APPROVAL_DENIED` | The approval did not match the payload. Nothing was dispatched. |
+| State | `committed` | Meaning |
+|---|---|---|
+| `VERIFIED_COMMITTED` | `true` | The effect happened, exactly once, and authoritative state proves it. |
+| `VERIFIED_COMPENSATED` | `false` | The effect happened and was then undone, and state proves both. |
+| `MANUAL_RECOVERY_REQUIRED` | `false` | Genuinely unresolved. `result.recovery` says what to do. |
+| `ABORTED` | `false` | State moved after approval. Nothing was dispatched. |
+| `PREFLIGHT_FAILED` | `false` | No material effect, or a precondition failed. `result.refusal` says which. |
+| `APPROVAL_DENIED` | `false` | The approval did not match the payload. Nothing was dispatched. |
+
+Faults in the engine itself — an unreachable ledger, an impossible state transition — still throw, because they are not outcomes of your effect.
+
+### When you are paged
+
+```ts
+if (!result.committed) {
+  logger.error(result.summary);        // one line, already written for a human
+}
+
+if (result.recovery) {
+  result.recovery.reason;                  // why it could not be resolved
+  result.recovery.instruction;             // what to do about it
+  result.recovery.logicalOperationId;      // ask the provider about this
+  result.recovery.effectMayHaveCommitted;  // false only on a definitive rejection
+  result.recovery.observedMatchesExpected; // present, but nothing attributes it here
+}
+```
+
+The last two are the difference between *it may have landed* and *it never left*, which is the first thing anyone needs at 3am.
+
+## Testing your effect
+
+The engine's guarantees hold only if your definition can answer "did operation X commit?". The suite ZeroGate runs against itself is exported, so you can point it at yours:
+
+```ts
+import test from "node:test";
+import { assertEffectVerified, verifyEffect } from "zerogate/testing";
+
+test("publish survives a lost acknowledgement", async () => {
+  assertEffectVerified(
+    await verifyEffect({
+      setup: async () => ({ adapter: createPublishEffect(baseUrl), input: PUBLISH_INPUT })
+    })
+  );
+});
+```
+
+It commits the effect for real, then drops the acknowledgement on the floor and checks that `findEvidence` can recover it without a second dispatch. Then it does the harder one: it lets *somebody else* make exactly the change your effect intended, loses your dispatch, and checks that you do not claim their work as yours. An effect whose `findEvidence` reads current state passes every other check and fails that one.
+
+Plus canonical-input stability, observation stability, no-op refusal, compensation, and — if you supply `concurrentEdit` — that compensation refuses to overwrite somebody else's write.
+
+Every failure names the function to change.
 
 ## CLI
 
@@ -125,15 +177,35 @@ npx zerogate keys new --out .zerogate/keys
 The default event ledger is in-memory. For anything that must survive a restart:
 
 ```ts
+import { TransactionEngine } from "zerogate";
 import { PostgresEventLedger } from "zerogate/postgres";
 
 const engine = new TransactionEngine({
   adapter: publishDocument,
-  ledger: new PostgresEventLedger({ connectionString: process.env.DATABASE_URL })
+  ledger: new PostgresEventLedger({
+    tenantId: "acme",                       // the ledger is isolated per tenant
+    connectionString: process.env["DATABASE_URL"]!
+  })
 });
 ```
 
 `SqliteLedger` is also exported for single-process durability. Apply the PostgreSQL schema from [`migrations/`](migrations) — in this repo, `npm run db:up && npm run db:migrate`.
+
+## Signing keys
+
+By default the engine signs with a keypair that dies with the process: internally consistent, and unverifiable by anyone, ever. It says so once as a process warning. For anything you intend to audit, keep the key:
+
+```ts
+import { ReceiptSigner, TransactionEngine } from "zerogate";
+import { readFileSync } from "node:fs";
+
+const engine = new TransactionEngine({
+  adapter: publishDocument,
+  receiptSigner: ReceiptSigner.fromPem(readFileSync(process.env["RECEIPT_KEY_PATH"]!, "utf8"))
+});
+```
+
+`result.receiptKeyRetention` tells you which you got. Pass `receiptSigner: "ephemeral"` to accept a throwaway key deliberately and silence the warning.
 
 ## Limits
 
@@ -172,6 +244,8 @@ The full reference is one page: [docs/README.md](docs/README.md).
 |---|---|
 | Understand the core terms | [Concepts](docs/README.md#concepts) |
 | See every terminal outcome | [State model](docs/README.md#state-model) |
+| Read a result correctly | [Reading a result](docs/README.md#reading-a-result) |
+| Prove your own effect is sound | [Testing an effect](docs/README.md#testing-an-effect) |
 | Verify evidence independently | [Receipts](docs/README.md#receipts) |
 | Pin an operation | [Effect contracts](docs/README.md#effect-contracts) |
 | Read every current limitation | [Limits](docs/README.md#limits) |

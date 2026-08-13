@@ -12,7 +12,9 @@ import tseslint from "typescript-eslint";
  */
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "site/**", "coverage/**"]
+    // `.scratch` holds the documentation snippets extracted for type-checking.
+    // They are published prose, linted by compiling them, not by style rules.
+    ignores: ["dist/**", "node_modules/**", "site/**", "coverage/**", ".scratch/**"]
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

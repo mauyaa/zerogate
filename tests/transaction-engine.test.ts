@@ -5,11 +5,15 @@ import { DocumentService } from "../examples/rest-resource/service.js";
 import {
   ApprovalAuthority,
   TransactionEngine,
-  ZeroGateError,
   verifyEventChain,
   verifyReceipt
 } from "../src/index.js";
-import { PUBLISH_INPUT, TEST_ACTOR, startPublishHarness } from "./helpers/publish-harness.js";
+import {
+  PUBLISH_INPUT,
+  TEST_ACTOR,
+  findObservation,
+  startPublishHarness
+} from "./helpers/publish-harness.js";
 
 /**
  * These tests drive the whole transaction over real sockets against the example
@@ -57,11 +61,12 @@ test("a lost acknowledgement is reconciled instead of retried", async (t) => {
     "the receipt notes should record that no blind retry happened"
   );
 
-  const reconciliation = result.receipt.actions[0]?.observations.find(
-    (observation) => observation["kind"] === "reconciliation"
+  const reconciliation = findObservation(
+    result.receipt.actions[0]?.observations,
+    "reconciliation"
   );
-  assert.equal(reconciliation?.["committed"], true);
-  assert.equal(reconciliation?.["resolved"], true);
+  assert.equal(reconciliation?.committed, true);
+  assert.equal(reconciliation?.resolved, true);
   assert.ok(
     (result.receipt.actions[0]?.providerRequestIds.length ?? 0) >= 1,
     "reconciliation should recover the provider request ID that actually committed"
@@ -209,10 +214,8 @@ test("a provider success response is not trusted when state disagrees", async (t
 
   assert.equal(result.transaction.state, "MANUAL_RECOVERY_REQUIRED");
   assert.notEqual(result.receipt.finalStatus, "VERIFIED_COMMITTED");
-  const verification = result.receipt.actions[0]?.observations.find(
-    (observation) => observation["kind"] === "verification"
-  );
-  assert.equal(verification?.["ok"], false);
+  const verification = findObservation(result.receipt.actions[0]?.observations, "verification");
+  assert.equal(verification?.ok, false);
 });
 
 test("a stale preview aborts before dispatch and still produces a receipt", async (t) => {
@@ -381,15 +384,18 @@ test("an unreachable provider is reported as safe to retry, not as unknown", asy
   t.after(() => service.close());
 
   const engine = new TransactionEngine({ adapter: createPublishEffect(baseUrl) });
-  await assert.rejects(
-    () =>
-      engine.run({
-        input: { documentId: "doc_gone", status: "published", tags: ["a", "b"] },
-        actor: TEST_ACTOR,
-        purpose: "Publish against a provider that is not listening"
-      }),
-    (error: unknown) =>
-      error instanceof ZeroGateError &&
-      (error.code === "PROVIDER_REJECTED" || error.code === "PROVIDER_SAFE_TO_RETRY")
-  );
+  const result = await engine.run({
+    input: { documentId: "doc_gone", status: "published", tags: ["a", "b"] },
+    actor: TEST_ACTOR,
+    purpose: "Publish against a provider that is not listening"
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.transaction.state, "PREFLIGHT_FAILED");
+  assert.equal(result.refusal?.dispatched, false, "an unreachable provider was never dispatched to");
+  assert.equal(result.refusal?.code, "PROVIDER_SAFE_TO_RETRY");
+  assert.equal(result.refusal?.retryable, true);
+  // Failing to observe is still an outcome, and it is recorded like one.
+  assert.equal(result.receipt.finalStatus, "PREFLIGHT_FAILED");
+  assert.equal(result.preview.witness, null, "nothing was observed, so no witness may be claimed");
 });
