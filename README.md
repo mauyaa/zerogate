@@ -157,11 +157,11 @@ npm test
 
 The test suite runs the whole engine against a real HTTP service over real sockets — including dropped connections mid-write, concurrent edits, and providers that cannot explain themselves. See [`examples/rest-resource`](examples/rest-resource).
 
-Optional PostgreSQL ledger tests:
+Optional PostgreSQL ledger tests. They **skip silently** without the environment variable, so check for `pass 1` rather than assuming they ran:
 
 ```bash
 npm run db:up
-ZEROGATE_ADMIN_DATABASE_URL=postgresql://postgres:zerogate@127.0.0.1:5432/postgres npm test
+ZEROGATE_TEST_ADMIN_DATABASE_URL=postgresql://postgres:zerogate@127.0.0.1:5432/postgres npm run test:postgres
 ```
 
 ## Documentation

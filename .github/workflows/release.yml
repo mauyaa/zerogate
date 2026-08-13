@@ -48,6 +48,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
+          # Writes the .npmrc entry that reads NODE_AUTH_TOKEN at publish time,
+          # so no token is ever interpolated into a shell command.
+          registry-url: https://registry.npmjs.org
       - name: Install core dependencies
         run: npm ci
       - name: Apply the checksum-locked migrations
@@ -102,10 +105,7 @@ jobs:
         if: ${{ env.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          npm config set "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}"
-          npm publish --provenance --access public
+        run: npm publish --provenance --access public
       - name: Note that npm publishing was skipped
         if: ${{ env.NPM_TOKEN == '' }}
         run: |
