@@ -32,6 +32,7 @@ import type {
   PreflightEvaluation
 } from "../core/adapter.js";
 import { hashCanonical } from "../core/canonical-json.js";
+import { NO_COMPENSATION_DECLARED } from "../core/define-effect.js";
 import { ProviderTimeoutAfterDispatchError } from "../core/errors.js";
 import { TransactionEngine, type TransactionResult } from "../core/transaction-engine.js";
 import type { Actor } from "../core/types.js";
@@ -141,17 +142,24 @@ export async function verifyEffect<TInput>(
       scenarios.push({ name, status: "skipped", detail: "Skipped by request." });
       return;
     }
-    const subject = await options.setup();
+    // setup() talks to a real provider, so it is one of the likeliest things
+    // here to fail. Letting it throw would throw away every result already
+    // collected and hand the caller an exception instead of a report — which
+    // is the failure mode this whole release exists to remove.
+    let subject: EffectUnderTest<TInput> | undefined;
     try {
+      subject = await options.setup();
       scenarios.push({ name, ...(await body(subject)) });
     } catch (error: unknown) {
       scenarios.push({
         name,
         status: "failed",
-        detail: `The scenario itself threw: ${error instanceof Error ? error.message : String(error)}`
+        detail: `${subject === undefined ? "setup() threw" : "The scenario itself threw"}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       });
     } finally {
-      await subject.cleanup?.();
+      await subject?.cleanup?.();
     }
   };
 
@@ -347,7 +355,7 @@ export async function verifyEffect<TInput>(
         detail: "The verified effect was undone and authoritative state proved the undo."
       };
     }
-    if (result.recovery?.reason.includes("no compensating operation") === true) {
+    if (result.recovery?.reason.includes(NO_COMPENSATION_DECLARED) === true) {
       return {
         status: "skipped",
         detail:
@@ -391,9 +399,19 @@ export async function verifyEffect<TInput>(
           "effect actually owns."
       };
     }
+    // Anything other than a blocked compensation means the run never reached
+    // the point this scenario tests, so passing it would prove nothing.
+    if (result.transaction.state !== "MANUAL_RECOVERY_REQUIRED" || result.recovery === undefined) {
+      return {
+        status: "failed",
+        detail:
+          `The effect never reached compensation, so nothing about its safety was shown: ` +
+          `${describe(result)} Check that concurrentEdit() writes to the same resource as input.`
+      };
+    }
     return {
       status: "passed",
-      detail: `Compensation was refused rather than overwriting newer state: ${describe(result)}`
+      detail: `Compensation was refused rather than overwriting newer state: ${result.recovery.reason}`
     };
   });
 

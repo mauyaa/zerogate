@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ProviderSafeToRetryError,
   ProviderTimeoutAfterDispatchError,
   TransactionEngine,
   ZeroGateError,
   assertCommitted,
   defineEffect
 } from "../src/index.js";
+import type { AnyEffectAdapter } from "../src/core/adapter.js";
 import { TEST_ACTOR } from "./helpers/publish-harness.js";
 
 /**
@@ -46,7 +48,9 @@ function publishEffect(options: {
       }
       options.onDispatch(options.store);
     },
-    findEvidence: () => options.evidence?.() ?? undefined,
+    // Passed through exactly as given: `?? undefined` here would rewrite a
+    // null into an undefined and quietly stop testing the null path at all.
+    findEvidence: () => (options.evidence === undefined ? undefined : options.evidence()),
     compensate: () => {
       options.store.status = "draft";
       options.store.version += 1;
@@ -201,6 +205,55 @@ test("an unclassified throw from compensate is unknown, not a failed undo", asyn
     "the undo may well have landed; claiming otherwise is a guess"
   );
   assert.match(result.notes.join(" "), /did not classify/);
+});
+
+test("a request that never reached the provider is not called a rejection", async () => {
+  const store: Doc = { id: "d1", status: "draft", version: 1 };
+  const result = await run(
+    publishEffect({
+      store,
+      onDispatch: () => {
+        throw new ProviderSafeToRetryError("the provider was unreachable");
+      }
+    })
+  );
+
+  assert.equal(result.committed, false);
+  assert.equal(store.status, "draft", "nothing may have been written");
+  assert.match(
+    result.recovery?.instruction ?? "",
+    /never reached the provider/,
+    "an operator must not be sent looking for a rejection that never happened"
+  );
+  assert.doesNotMatch(result.recovery?.instruction ?? "", /rejected the request outright/);
+});
+
+test("an adapter that returns neither a preview nor a rejection still gets a receipt", async () => {
+  // A third party can implement EffectAdapter directly, and break its contract.
+  const broken = {
+    operation: "test.broken",
+    contractDigest: "sha256:0",
+    residualRisk: [],
+    canonicalizeInput: (input: unknown) => input,
+    resourceScope: () => [{ type: "test", id: "b1" }],
+    evaluatePreflight: () => ({}) as never
+  } as unknown as AnyEffectAdapter;
+
+  const result = await new TransactionEngine({
+    adapter: broken,
+    receiptSigner: "ephemeral"
+  }).run({
+    input: {},
+    actor: TEST_ACTOR,
+    purpose: "Run a misbehaving adapter"
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.transaction.state, "PREFLIGHT_FAILED");
+  assert.equal(result.refusal?.code, "ADAPTER_FAILED");
+  assert.match(result.refusal?.message ?? "", /neither a preview nor a rejection/);
+  assert.equal(result.receipt.finalStatus, "PREFLIGHT_FAILED");
+  assert.equal(result.preview.witness, null);
 });
 
 test("a refused run carries the reason, not just the code", async () => {
