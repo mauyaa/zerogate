@@ -5,6 +5,8 @@ One page, because a reference split across seven files drifts out of sync with i
 - [Concepts](#concepts)
 - [Defining an effect](#defining-an-effect)
 - [State model](#state-model)
+- [Reading a result](#reading-a-result)
+- [Testing an effect](#testing-an-effect)
 - [Receipts](#receipts)
 - [Effect contracts](#effect-contracts)
 - [Ledgers](#ledgers)
@@ -39,7 +41,10 @@ The distinction everything rests on: a provider's success response is **evidence
 import { defineEffect, ProviderTimeoutAfterDispatchError } from "zerogate";
 import contract from "./publish.effect.json" with { type: "json" };
 
-export const publishDocument = defineEffect({
+type PublishInput = { documentId: string; status: string; tags: string[] };
+type Document = { status: string; tags: string[]; version: number; updatedAt: string };
+
+export const publishDocument = defineEffect<PublishInput, Document>({
   operation: "docs.publish",
   contract,
   materialFields: ["status", "tags"],
@@ -64,10 +69,18 @@ export const publishDocument = defineEffect({
 
   findEvidence: ({ logicalOperationId }) => api.findOperation(logicalOperationId),
 
-  compensate: ({ input, restore, logicalOperationId }) =>
-    api.patchDocument(input.documentId, { idempotencyKey: logicalOperationId, body: restore })
+  async compensate({ input, restore, logicalOperationId }) {
+    await api.patchDocument(input.documentId, {
+      idempotencyKey: logicalOperationId,
+      body: restore
+    });
+  }
 });
 ```
+
+**Write both type arguments.** `defineEffect` cannot infer them: every function in the definition is contextually typed, so there is nothing for TypeScript to infer `TState` from, and it falls back to `object`. `defineEffect<PublishInput, Document>` is what makes `state.version` and `input.documentId` known inside every function above.
+
+`dispatch` and `compensate` may return nothing at all. Return `{ providerRequestId }` only when the provider gives you an identifier worth recording. `findEvidence` may return `undefined` or `null` for "no such operation" — whichever your lookup already produces.
 
 ### Optional fields worth knowing
 
@@ -105,9 +118,78 @@ Transitions are checked. An illegal move throws `INVALID_STATE_TRANSITION` rathe
 
 Four of the six endings involve nothing having been dispatched. Refusing early is the common case.
 
+`run()` returns a result for every one of them, including cases where the effect definition itself threw before the dispatch boundary — an unreachable provider, a credential caught by the evidence guard, a bug in `observe`. Those arrive as `PREFLIGHT_FAILED` with `result.refusal` set, and the original error on `result.refusal.cause`. What still throws is a fault in the engine or its ledger: an impossible state transition, a ledger that cannot be written. Those are not outcomes of your effect and must not be mistaken for one.
+
+---
+
+## Reading a result
+
+```ts
+result.committed;    // the only success test: verified against authoritative state
+result.summary;      // one line, already phrased for a human, true in every outcome
+result.refusal;      // set when nothing was dispatched, and why
+result.recovery;     // set when a human has to finish the job
+```
+
+`assertCommitted(result)` throws instead, for callers who would rather handle one exception than a state machine; the thrown error carries `refusal.cause` so a bug in a definition keeps its stack.
+
+| Field on `result.recovery` | Answers |
+|---|---|
+| `reason` | Why the engine could not resolve it |
+| `instruction` | What to do next, naming the resource |
+| `logicalOperationId` | The identifier to ask the provider about |
+| `effectMayHaveCommitted` | `false` only after a definitive provider rejection |
+| `observedMatchesExpected` | Whether the intended change is present but unattributed |
+
+The last two separate *it may have landed* from *it never left*. Both are `MANUAL_RECOVERY_REQUIRED`, and they call for opposite actions.
+
+`result.action.observations` is a discriminated union on `kind`, so reading the evidence is a `switch`, not a cast:
+
+```ts
+for (const observation of result.action.observations) {
+  if (observation.kind === "reconciliation") observation.committed;
+  if (observation.kind === "verification") observation.ok;
+}
+```
+
+---
+
+## Testing an effect
+
+The engine's guarantees are only as good as the definition underneath them, and `findEvidence` is where they break. The suite ZeroGate runs against itself is exported for pointing at yours:
+
+```ts
+import test from "node:test";
+import { assertEffectVerified, verifyEffect } from "zerogate/testing";
+
+test("publish survives the chaos suite", async () => {
+  assertEffectVerified(
+    await verifyEffect({
+      // Called once per scenario. Return a provider in a known starting state.
+      setup: async () => ({ adapter: createPublishEffect(baseUrl), input: PUBLISH_INPUT }),
+      concurrentEdit: async () => { /* write to the same resource out of band */ }
+    })
+  );
+});
+```
+
+| Scenario | What a failure means |
+|---|---|
+| `commits-once` | The effect does not work at all, or dispatches more than once. |
+| `canonical-input-is-stable` | `canonicalizeInput` is not idempotent, so approvals bind to a moving payload. |
+| `observation-is-stable` | Something time-varying reaches the witness; freshness checks will abort healthy runs. |
+| `lost-acknowledgement-is-recoverable` | `findEvidence` cannot prove your own dispatch. Every dropped connection becomes a page. |
+| `undispatched-request-is-not-claimed` | `findEvidence` reports success for an operation that never ran. |
+| `foreign-change-is-not-claimed` | `findEvidence` reads current state rather than provider evidence, so it claims changes other writers made — and compensation will then undo their work. |
+| `repeat-is-refused-as-no-op` | `expected()` does not describe what `dispatch` leaves behind. Every receipt diff is fiction. |
+| `downstream-failure-is-compensated` | Compensation does not work, or none is declared. |
+| `compensation-refuses-concurrent-edit` | Compensation overwrites writes it does not own. Narrow `materialFields`. |
+
+The suite mutates the provider for real: `setup` must return a fresh starting state each time it is called. Scenarios needing a hook you did not supply are reported as skipped rather than quietly passed.
+
 ### The unknown-outcome path
 
-`dispatch` throws `ProviderTimeoutAfterDispatchError`. The action moves to `OUTCOME_UNKNOWN` and the transaction to `RECONCILING`. No retry is attempted — `forwardDispatchCount` stays at 1 for the life of the transaction. Then exactly one of:
+`dispatch` throws `ProviderTimeoutAfterDispatchError` — or throws anything the definition did not classify, which says just as little about whether the request left. The action moves to `OUTCOME_UNKNOWN` and the transaction to `RECONCILING`. No retry is attempted — `forwardDispatchCount` stays at 1 for the life of the transaction. Then exactly one of:
 
 1. **Evidence found** — the dispatch committed. State is verified as normal, and the provider request ID recovered from that evidence is recorded.
 2. **No evidence, expected state present** — still unresolved. Nothing attributes that state to this transaction, so retry and compensation both stay blocked. This is the case naive implementations get wrong.
@@ -148,9 +230,11 @@ import { readFileSync } from "node:fs";
 
 const engine = new TransactionEngine({
   adapter: publishDocument,
-  receiptSigner: ReceiptSigner.fromPem(readFileSync(process.env.RECEIPT_KEY_PATH, "utf8"))
+  receiptSigner: ReceiptSigner.fromPem(readFileSync(process.env["RECEIPT_KEY_PATH"]!, "utf8"))
 });
 ```
+
+Leaving `receiptSigner` unset emits a process warning, because a silently unverifiable receipt is the version of this mistake that reaches production. Pass the literal `"ephemeral"` to accept that deliberately and silence it — `result.receiptKeyRetention` reports which you got.
 
 ### Credentials never reach a receipt
 
@@ -170,7 +254,7 @@ npx zerogate contract digest ./publish.effect.json
 
 Pin that digest in a test. ZeroGate does not interpret the contract as a program — your `defineEffect` functions do the work, and the contract records what they are supposed to guarantee. Keeping the two in agreement is your responsibility, which is why the digest is worth asserting.
 
-See [`examples/rest-resource/document-publish.effect.json`](../examples/rest-resource/document-publish.effect.json) for a complete one.
+See [`examples/rest-resource/document-publish.effect.json`](https://github.com/mauyaa/zerogate/blob/main/examples/rest-resource/document-publish.effect.json) for a complete one.
 
 ---
 
@@ -183,11 +267,15 @@ See [`examples/rest-resource/document-publish.effect.json`](../examples/rest-res
 | `PostgresEventLedger` | Tenant-scoped, append-only, row-level security. Import from `zerogate/postgres`. |
 
 ```ts
+import { TransactionEngine } from "zerogate";
 import { PostgresEventLedger } from "zerogate/postgres";
 
 const engine = new TransactionEngine({
   adapter: publishDocument,
-  ledger: new PostgresEventLedger({ connectionString: process.env.DATABASE_URL })
+  ledger: new PostgresEventLedger({
+    tenantId: "acme",                       // the ledger is isolated per tenant
+    connectionString: process.env["DATABASE_URL"]!
+  })
 });
 ```
 
@@ -205,7 +293,7 @@ npx zerogate contract digest <contract.json>
 npx zerogate keys new [--out <dir>] [--name <name>]
 ```
 
-`receipt verify` exits non-zero on any failed check, so it drops into CI directly.
+`receipt verify` exits non-zero on any failed check, so it drops into CI directly. Its output leads with `finalStatus`, and names the verdict `authentic` rather than `ok`: a receipt for a transaction that needed a human is a perfectly authentic receipt, and the two questions must not be confused.
 
 ---
 

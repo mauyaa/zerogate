@@ -63,7 +63,12 @@ try {
     "LICENSE",
     "bin/zerogate.js",
     "dist/src/index.js",
-    "dist/src/index.d.ts"
+    "dist/src/index.d.ts",
+    "dist/src/testing/index.js",
+    "dist/src/testing/index.d.ts",
+    // The README calls this "the full reference"; a link into an unshipped file
+    // is a dead link for everyone reading inside node_modules.
+    "docs/README.md"
   ];
   for (const expected of required) {
     if (!files.includes(expected)) {
@@ -120,7 +125,7 @@ const adapter = defineEffect({
   }
 });
 
-const engine = new TransactionEngine({ adapter });
+const engine = new TransactionEngine({ adapter, receiptSigner: "ephemeral" });
 const result = await engine.run({
   input: { id: "r1", status: "published" },
   actor: { principalId: "u1", agentId: "smoke", agentVersion: "1.0.0" },
@@ -153,6 +158,40 @@ console.log(JSON.stringify(checks));
 
   const libraryOutput = run(process.execPath, ["use.mjs"], { cwd: workDir });
 
+  // The package is ESM, but Node can `require` ESM — provided the exports map
+  // offers a condition CommonJS resolution matches. With only "import", a CJS
+  // caller gets ERR_PACKAGE_PATH_NOT_EXPORTED, whose message does not even
+  // mention ESM.
+  writeFileSync(
+    join(workDir, "require.cjs"),
+    `const zerogate = require("zerogate");
+const testing = require("zerogate/testing");
+if (typeof zerogate.TransactionEngine !== "function") throw new Error("no TransactionEngine");
+if (typeof zerogate.assertCommitted !== "function") throw new Error("no assertCommitted");
+if (typeof testing.verifyEffect !== "function") throw new Error("no verifyEffect");
+console.log("ok");
+`
+  );
+  const requireOutput = run(process.execPath, ["require.cjs"], { cwd: workDir }).trim();
+  if (requireOutput !== "ok") {
+    throw new Error(`require("zerogate") did not work from CommonJS: ${requireOutput}`);
+  }
+
+  // The testing subpath is the one a consumer imports from their own tests.
+  writeFileSync(
+    join(workDir, "use-testing.mjs"),
+    `import { verifyEffect, assertEffectVerified } from "zerogate/testing";
+if (typeof verifyEffect !== "function" || typeof assertEffectVerified !== "function") {
+  throw new Error("zerogate/testing did not export its entry points");
+}
+console.log("ok");
+`
+  );
+  const testingOutput = run(process.execPath, ["use-testing.mjs"], { cwd: workDir }).trim();
+  if (testingOutput !== "ok") {
+    throw new Error(`the zerogate/testing subpath did not load: ${testingOutput}`);
+  }
+
   // Exercise the command through the `bin` linkage npm created, not by file
   // path. Running the file directly passes even when the bin entry is missing,
   // which is how a dropped bin field stayed invisible.
@@ -184,6 +223,8 @@ console.log(JSON.stringify(checks));
         unpackedSize: packed.unpackedSize,
         fileCount: files.length,
         library: JSON.parse(libraryOutput.trim()),
+        commonJsRequire: true,
+        testingSubpath: true,
         cli: { help: true, digest }
       },
       null,

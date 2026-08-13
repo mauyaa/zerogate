@@ -2,7 +2,7 @@ import { createPublishEffect, type PublishInput } from "../../examples/rest-reso
 import { DocumentService } from "../../examples/rest-resource/service.js";
 import { TransactionEngine, type RunInput } from "../../src/index.js";
 import type { EventLedger } from "../../src/core/event-ledger.js";
-import type { Actor } from "../../src/core/types.js";
+import type { Actor, Observation } from "../../src/core/types.js";
 
 export const TEST_ACTOR: Actor = {
   principalId: "u_release",
@@ -54,6 +54,22 @@ function buildEngine(baseUrl: string, ledger?: EventLedger) {
     adapter: createPublishEffect(baseUrl),
     ...(ledger === undefined ? {} : { ledger })
   });
+}
+
+/**
+ * Finds one recorded observation by kind, narrowed to that member of the union.
+ *
+ * Reading evidence should be a `switch`, not a cast — the tests use the same
+ * path a caller does, so a regression in that ergonomics shows up here.
+ */
+export function findObservation<TKind extends Observation["kind"]>(
+  observations: readonly Observation[] | undefined,
+  kind: TKind
+): Extract<Observation, { kind: TKind }> | undefined {
+  return observations?.find(
+    (observation): observation is Extract<Observation, { kind: TKind }> =>
+      observation.kind === kind
+  );
 }
 
 export const PUBLISH_INPUT: PublishInput = {

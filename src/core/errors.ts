@@ -17,6 +17,8 @@ export type ErrorCode =
   | "RECOVERY_VERIFICATION_FAILED"
   | "LEDGER_CONFLICT"
   | "LEDGER_INTEGRITY_FAILED"
+  /** An effect definition threw something that is not a provider outcome. */
+  | "ADAPTER_FAILED"
   | "UNSUPPORTED";
 
 export class ZeroGateError extends Error {

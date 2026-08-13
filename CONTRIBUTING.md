@@ -58,6 +58,11 @@ ZEROGATE_TEST_ADMIN_DATABASE_URL=postgresql://postgres:zerogate@127.0.0.1:5432/p
 
 New behaviour needs a test that would fail without it. For anything touching transaction semantics, that means a test against the example HTTP service in `examples/rest-resource` — a real server over a real socket, with the provider genuinely misbehaving. Do not add a test that stages an outcome by telling the engine which ending to perform; the previous version of this project did that, and it hid real defects.
 
+Two guards protect the parts of this project that are not code:
+
+- **Documentation is compiled.** `tests/documented-typescript.test.ts` extracts every ` ```ts ` block from `README.md` and `docs/README.md` and type-checks it at plain `strict: true`, with the imaginary provider declared in `tests/fixtures/docs-globals.d.ts`. A snippet that a reader could not paste and compile is a broken build. If an example needs a new imaginary binding, declare it in that fixture rather than weakening the example.
+- **The exported chaos suite is tested against a wrong effect.** `src/testing` is what users point at their own definitions, so `tests/verify-effect.test.ts` checks both that a correct effect passes and that a plausible mistake — `findEvidence` inferring from current state — fails, with the failure naming the function to change. A scenario nobody can fail is a scenario that proves nothing.
+
 ## Releasing
 
 Tagging is the whole process:

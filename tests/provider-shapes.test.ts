@@ -6,7 +6,7 @@ import {
   defineEffect,
   verifyReceipt
 } from "../src/index.js";
-import { TEST_ACTOR } from "./helpers/publish-harness.js";
+import { TEST_ACTOR, findObservation } from "./helpers/publish-harness.js";
 
 /**
  * A provider shaped as the opposite of the worked example.
@@ -175,10 +175,11 @@ test("a weak witness is recorded as weak rather than overstated", async () => {
     purpose: "Post an entry against a provider with a weak freshness guarantee"
   });
 
-  assert.equal(result.preview.witness.strength, "weak");
-  const preflight = result.receipt.actions[0]?.observations.find(
-    (observation) => observation["kind"] === "preflight"
+  assert.equal(result.preview.witness?.strength, "weak");
+  const preflight = findObservation(result.receipt.actions[0]?.observations, "preflight");
+  assert.equal(
+    preflight?.witness.strength,
+    "weak",
+    "the receipt must not claim a stronger witness than exists"
   );
-  const witness = preflight?.["witness"] as { strength?: string } | undefined;
-  assert.equal(witness?.strength, "weak", "the receipt must not claim a stronger witness than exists");
 });
