@@ -84,6 +84,31 @@ test("compensation refuses to overwrite a concurrent edit", async () => {
   assertEffectVerified(report);
 });
 
+test("a provider that will not start is reported, not thrown", async () => {
+  // setup() touches a real provider, so it is one of the likeliest things to
+  // fail. The caller must still get a report back.
+  const report = await verifyEffect<PublishInput>({
+    setup: () => {
+      throw new Error("the provider would not start");
+    },
+    skip: [
+      "canonical-input-is-stable",
+      "observation-is-stable",
+      "lost-acknowledgement-is-recoverable",
+      "undispatched-request-is-not-claimed",
+      "foreign-change-is-not-claimed",
+      "repeat-is-refused-as-no-op",
+      "downstream-failure-is-compensated",
+      "compensation-refuses-concurrent-edit"
+    ]
+  });
+
+  assert.equal(report.ok, false);
+  const first = report.scenarios.find((scenario) => scenario.name === "commits-once");
+  assert.equal(first?.status, "failed");
+  assert.match(first?.detail ?? "", /setup\(\) threw: the provider would not start/);
+});
+
 test("the suite fails an effect that reads evidence out of current state", async () => {
   interface Doc {
     id: string;
