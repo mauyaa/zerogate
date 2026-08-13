@@ -28,6 +28,14 @@ export interface DispatchOutcome {
   result?: unknown;
 }
 
+/**
+ * What `dispatch` and `compensate` may return.
+ *
+ * Returning nothing is allowed: a provider that reports no request identifier
+ * has nothing to record, and forcing `return {}` teaches nothing.
+ */
+export type DispatchResult = DispatchOutcome | void;
+
 /** Proof, from the provider, that one logical operation committed exactly once. */
 export interface CommitEvidence {
   providerRequestId?: string;
@@ -116,17 +124,20 @@ export interface EffectDefinition<TInput, TState extends ProviderState> {
    * genuinely unknown — that is the signal that makes ZeroGate reconcile
    * instead of retrying. Never guess.
    */
-  dispatch(context: DispatchContext<TInput, TState>): Awaitable<DispatchOutcome>;
+  dispatch(context: DispatchContext<TInput, TState>): Awaitable<DispatchResult>;
   /**
    * Ask the provider whether `logicalOperationId` committed. Return `undefined`
-   * only when the provider genuinely cannot say — that answer keeps the
+   * or `null` — whichever your lookup already returns for "no such operation" —
+   * only when the provider genuinely cannot say. That answer keeps the
    * transaction unresolved rather than risking a double effect.
    */
-  findEvidence(context: EvidenceContext<TInput, TState>): Awaitable<CommitEvidence | undefined>;
+  findEvidence(
+    context: EvidenceContext<TInput, TState>
+  ): Awaitable<CommitEvidence | undefined | null>;
   /** Field values that undo the forward effect. Defaults to the witness values. */
   restore?(input: TInput, before: TState): Partial<TState>;
   /** Apply a compensating change. Omit to make the effect non-compensatable. */
-  compensate?(context: CompensateContext<TInput, TState>): Awaitable<DispatchOutcome>;
+  compensate?(context: CompensateContext<TInput, TState>): Awaitable<DispatchResult>;
 }
 
 export interface DefinedPreflight<TInput, TState> extends Preflight<TState> {
@@ -139,7 +150,19 @@ export interface DefinedPreflight<TInput, TState> extends Preflight<TState> {
 }
 
 function equalValue(left: unknown, right: unknown): boolean {
+  // An absent field is a value here, not an error: a field the effect sets for
+  // the first time is missing from `before` and present in `expected`.
+  if (left === undefined || right === undefined) return left === right;
   return hashCanonical(left) === hashCanonical(right);
+}
+
+function jsonOrUndefined(value: unknown): JsonValue | undefined {
+  return value === undefined ? undefined : toJsonValue(value);
+}
+
+/** Hashes a field value, naming absence rather than failing to canonicalise it. */
+function hashValue(value: unknown): string {
+  return value === undefined ? "absent" : hashCanonical(value);
 }
 
 function fieldValue<TState extends ProviderState>(state: TState, field: string): unknown {
@@ -189,9 +212,34 @@ export function defineEffect<TInput, TState extends ProviderState>(
   /** Every read of provider state goes through here, so nothing is compared raw. */
   const observe = async (input: TInput): Promise<TState> => normalize(await definition.observe(input));
 
+  /**
+   * A material field that appears in neither the observed state nor the
+   * expected result is a mistake in the definition, not a provider condition.
+   * Saying so by name here is the difference between a five-second fix and a
+   * canonicalisation error thrown from somewhere three layers down.
+   */
+  const assertMaterialFieldsExist = (before: TState, expected: TState): void => {
+    const observedKeys = Object.keys(before);
+    const missing = materialFields.filter(
+      (field) => !(field in (before as object)) && !(field in (expected as object))
+    );
+    if (missing.length === 0) return;
+    throw new ZeroGateError(
+      "UNSUPPORTED",
+      `Effect '${definition.operation}' declares material field${missing.length > 1 ? "s" : ""} ` +
+        `${missing.map((field) => `'${field}'`).join(", ")}, which ${
+          missing.length > 1 ? "are" : "is"
+        } absent from both the observed provider state and the expected result. ` +
+        `Observed fields: ${observedKeys.length === 0 ? "(none)" : observedKeys.join(", ")}.`,
+      false,
+      { missingFields: missing, observedFields: observedKeys }
+    );
+  };
+
   const buildPreflight = async (input: TInput): Promise<TPreflight> => {
     const before = await observe(input);
     const expected = normalize(definition.expected(input, before));
+    assertMaterialFieldsExist(before, expected);
     const diff: MaterialDiff[] = [];
     for (const field of materialFields) {
       const beforeValue = fieldValue(before, field);
@@ -199,8 +247,8 @@ export function defineEffect<TInput, TState extends ProviderState>(
       if (!equalValue(beforeValue, afterValue)) {
         diff.push({
           field,
-          before: toJsonValue(beforeValue),
-          after: toJsonValue(afterValue)
+          before: jsonOrUndefined(beforeValue),
+          after: jsonOrUndefined(afterValue)
         });
       }
     }
@@ -331,13 +379,13 @@ export function defineEffect<TInput, TState extends ProviderState>(
           );
         }
       }
-      return preflight.diff.map((change) =>
+      return preflight.diff.map((change): Record<string, JsonValue> =>
         redactFields.has(change.field)
           ? {
               field: change.field,
               redacted: true,
-              beforeHash: hashCanonical(change.before),
-              afterHash: hashCanonical(change.after)
+              beforeHash: hashValue(change.before),
+              afterHash: hashValue(change.after)
             }
           : {
               field: change.field,
@@ -355,7 +403,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
         stateHash: hashCanonical(observed),
         materialFields: changedFields(preflight).map((field) => ({
           field,
-          valueHash: hashCanonical(fieldValue(observed, field)),
+          valueHash: hashValue(fieldValue(observed, field)),
           matchesExpected: equalValue(
             fieldValue(observed, field),
             fieldValue(preflight.expected, field)
@@ -388,14 +436,14 @@ export function defineEffect<TInput, TState extends ProviderState>(
     },
 
     async dispatch(request): Promise<DispatchEvidence<DispatchOutcome["result"]>> {
-      const outcome = await definition.dispatch({
+      const outcome = (await definition.dispatch({
         input: request.preflight.input,
         before: request.preflight.before,
         expected: request.preflight.expected,
         logicalOperationId: request.logicalOperationId,
         attemptId: request.attemptId,
         payloadHash: request.preflight.payloadHash
-      });
+      })) ?? {};
       return {
         logicalOperationId: request.logicalOperationId,
         attemptId: request.attemptId,
@@ -419,7 +467,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
         logicalOperationId
       });
       const verification = await verifyForward(preflight);
-      if (evidence !== undefined) {
+      if (evidence !== undefined && evidence !== null) {
         return {
           resolved: true,
           committed: true,
@@ -468,10 +516,28 @@ export function defineEffect<TInput, TState extends ProviderState>(
       if (!outcome.ok) {
         return { safe: false, reason: outcome.reason };
       }
+      const payload = restoreValues(preflight);
+      // A field this effect created did not exist before it ran, and "make it
+      // not exist again" is not a value a patch can carry. Refusing is the only
+      // honest answer; a definition that knows better supplies `restore`.
+      const uncreatable = Object.entries(payload)
+        .filter(([, value]) => value === undefined)
+        .map(([field]) => field);
+      if (uncreatable.length > 0) {
+        return {
+          safe: false,
+          reason:
+            `Field${uncreatable.length > 1 ? "s" : ""} ${uncreatable
+              .map((field) => `'${field}'`)
+              .join(", ")} did not exist before this effect, so restoring the previous value ` +
+            `would mean removing ${uncreatable.length > 1 ? "them" : "it"}. Declare restore() on ` +
+            `'${definition.operation}' if the provider can express that.`
+        };
+      }
       return {
         safe: true,
         reason: "Every field owned by this effect still matches the expected result",
-        payload: restoreValues(preflight)
+        payload
       };
     },
 
@@ -483,14 +549,14 @@ export function defineEffect<TInput, TState extends ProviderState>(
           false
         );
       }
-      const outcome = await definition.compensate({
+      const outcome = (await definition.compensate({
         input: request.preflight.input,
         before: request.preflight.before,
         expected: request.preflight.expected,
         restore: request.payload,
         logicalOperationId: request.logicalOperationId,
         attemptId: request.attemptId
-      });
+      })) ?? {};
       return {
         logicalOperationId: request.logicalOperationId,
         attemptId: request.attemptId,
@@ -515,7 +581,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
         logicalOperationId,
         restore
       });
-      if (evidence === undefined) {
+      if (evidence === undefined || evidence === null) {
         return {
           resolved: false,
           committed: false,

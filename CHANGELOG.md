@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0
+
+A developer-experience release. The engine's guarantees did not change; what changed is how much of the first hour is spent fighting the package instead of using it, and how much of a bad outcome you are handed rather than left to dig for.
+
+### Added
+
+- **`zerogate/testing`.** The chaos suite this project runs against itself, exported so it can be pointed at your effect. It commits the effect for real and then drops the acknowledgement, checking that `findEvidence` can recover the outcome without a second dispatch. Then it lets a different writer make exactly the change your effect intended, loses your dispatch, and checks that you do not claim their work — the one scenario a `findEvidence` that reads current state fails, while passing every other check. Also covers canonical-input stability, observation stability, an operation that never left, no-op refusal, compensation, and, given a `concurrentEdit` hook, that compensation refuses to overwrite somebody else's write. Every failure names the function to change.
+- **`result.committed`** — the one boolean that answers "did this happen?".
+- **`result.summary`** — one line, already phrased for a human, correct in every outcome.
+- **`result.recovery`** — the operator packet for `MANUAL_RECOVERY_REQUIRED`, promoted out of `action.observations`. It carries the reason, an instruction naming the resource, the `logicalOperationId` to ask the provider about, and two fields that separate *it may have landed* from *it never left*: `effectMayHaveCommitted` and `observedMatchesExpected`.
+- **`result.refusal`** — why nothing was dispatched, with the original error on `.cause`.
+- **`assertCommitted(result)`**, for callers who prefer one exception to a state machine.
+- **`result.receiptKeyRetention`**, and a one-time process warning when receipts are signed with an ephemeral key. The default was convenient and silently worthless for audit, which is the combination that reaches production unnoticed. `receiptSigner: "ephemeral"` accepts it deliberately and silences the warning.
+- **`Observation` is a discriminated union** on `kind`, so reading recorded evidence is a `switch` rather than an index-signature cast.
+- A test that compiles every TypeScript example in `README.md` and `docs/README.md`, at plain `strict: true`.
+
+### Fixed
+
+- **An unclassified throw from `dispatch` was reported as a definitive provider rejection**, complete with "nothing committed and there is nothing to undo" — while the change could be sitting in the provider. A throw that is not a `ZeroGateError` says nothing about whether the request left, so it is now treated as an unknown outcome and reconciled, and the note names the two errors to throw instead. This was the library's own rule being broken in the library.
+- **The quickstart did not compile.** `defineEffect({...})` cannot infer its type parameters — every function in the definition is contextually typed, so `TState` fell back to `object` and `version: (state) => state.version` failed with `TS2339`. Both documented examples now write `defineEffect<PublishInput, Document>` and say why. Three further snippets did not compile either: a `string | null` request ID, an unchecked `process.env` read, and a `PostgresEventLedger` missing its required `tenantId`.
+- **`require("zerogate")` failed** with `ERR_PACKAGE_PATH_NOT_EXPORTED` — a message that does not even mention ESM. The exports map now offers a `default` condition, so CommonJS callers on Node 22.12+ work.
+- **A typo in `materialFields` produced `Unsupported value at $: undefined`.** A material field absent from observed state now raises an error naming the field and listing the fields that were actually there. A field the effect *creates* — absent before, present after — is now an ordinary diff rather than a canonicalisation failure.
+- **Preflight rejections dropped their message.** The engine knew "The requested change has no material effect" and reported only `UNSUPPORTED`. The reason is now in the note, the observation, and `result.refusal`.
+- **`docs/README.md` was not in the published tarball**, though `README.md` calls it the full reference.
+- Compensation that would have to remove a field it created is refused with an explanation, rather than failing to canonicalise `undefined`.
+
+### Changed
+
+- **`run()` no longer throws for provider or definition faults.** An unreachable provider, a credential caught by the evidence guard, or an effect that throws during `observe` now end as `PREFLIGHT_FAILED` with a signed receipt and `result.refusal`, instead of escaping as an exception with no record. Faults in the engine or its ledger still throw, because they are not outcomes of your effect. **This is a behaviour change**: code that relied on `run()` rejecting must check `result.committed`.
+- `dispatch` and `compensate` may return nothing; `findEvidence` may return `null` as well as `undefined`. All three matched what real provider clients already do and previously did not typecheck.
+- **Breaking:** `zerogate receipt verify` reports `authentic` instead of `ok`, and leads with `finalStatus`. A receipt for a transaction that needed a human is a perfectly authentic receipt; conflating the two questions invited exactly the wrong reading. The exit code is unchanged.
+- `manualRecovery` entries carry an `instruction` that names the resource and the next step, rather than a generic sentence. The one entry that carried no instruction at all now does.
+
 ## 0.4.0
 
 ### Fixed

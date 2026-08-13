@@ -145,6 +145,88 @@ export interface RecoveryPlan<TRecovery> {
   payload?: TRecovery;
 }
 
+/** The witness as it appears in evidence: the state itself is never included. */
+export type WitnessSummary = {
+  observedAt: string;
+  providerVersion: string;
+  stateHash: string;
+  strength: StateWitness<unknown>["strength"];
+};
+
+/**
+ * One recorded step in an action's history.
+ *
+ * Declared as a discriminated union on `kind` so reading evidence is an
+ * ordinary `switch` rather than a cast. Every member is still a plain JSON
+ * object, because these are signed into receipts verbatim.
+ */
+export type Observation =
+  | { kind: "preflight"; witness: WitnessSummary; diff: Array<Record<string, JsonValue>> }
+  | {
+      kind: "preflight-rejection";
+      reasonCode: string;
+      reason: string;
+      retryable: boolean;
+      dispatchBoundaryCrossed: false;
+      witness: WitnessSummary | null;
+    }
+  | {
+      kind: "approval-rejection";
+      reasonCode: string;
+      reason: string;
+      retryable: boolean;
+      dispatchBoundaryCrossed: false;
+    }
+  | {
+      kind: "staleness-rejection";
+      reasonCode: string;
+      reason: string;
+      retryable: boolean;
+      dispatchBoundaryCrossed: false;
+      details: JsonValue;
+    }
+  | ({ kind: "dispatch" } & DispatchObservation)
+  | ({ kind: "compensation_dispatch" } & DispatchObservation)
+  | ({ kind: "reconciliation" } & ReconciliationObservation)
+  | ({ kind: "compensation_reconciliation" } & ReconciliationObservation)
+  | ({ kind: "verification" } & VerificationObservation)
+  | ({ kind: "recovery_verification" } & VerificationObservation)
+  | { kind: "recovery_plan"; safe: boolean; reason: string; payloadHash: string | null };
+
+/** The body of a `dispatch` or `compensation_dispatch` observation. */
+export type DispatchObservation = {
+  logicalOperationId: string;
+  attemptId: string;
+  providerRequestId: string | null;
+  classification: OutcomeClassification;
+  observedAt: string;
+};
+
+/** The body of a `reconciliation` or `compensation_reconciliation` observation. */
+export type ReconciliationObservation = {
+  resolved: boolean;
+  committed: boolean;
+  finality: Finality;
+  reason: string;
+  observed: Record<string, JsonValue> | null;
+};
+
+/** The body of a `verification` or `recovery_verification` observation. */
+export type VerificationObservation = {
+  ok: boolean;
+  finality: Finality;
+  reason: string | null;
+  observed: Record<string, JsonValue>;
+};
+
+/** What a human needs in order to finish what the engine would not guess at. */
+export type ManualRecoveryItem = {
+  actionId: string;
+  reason: string;
+  instruction: string;
+  currentState?: Record<string, JsonValue>;
+};
+
 export interface ActionRuntimeRecord {
   actionId: string;
   transactionId: string;
@@ -154,7 +236,7 @@ export interface ActionRuntimeRecord {
   contractDigest: string;
   state: ActionState;
   attempts: string[];
-  observations: Array<Record<string, JsonValue>>;
+  observations: Observation[];
   residualRisk: string[];
 }
 
@@ -199,7 +281,7 @@ export interface ReceiptAction {
   finality: Finality;
   attemptIds: string[];
   providerRequestIds: string[];
-  observations: Array<Record<string, JsonValue>>;
+  observations: Observation[];
   recovery?: Record<string, JsonValue>;
   residualRisk: string[];
 }
@@ -231,7 +313,7 @@ export interface ReceiptBody {
   };
   actions: ReceiptAction[];
   approvals: Array<Record<string, JsonValue>>;
-  manualRecovery: Array<Record<string, JsonValue>>;
+  manualRecovery: ManualRecoveryItem[];
 }
 
 export interface SignedReceipt extends ReceiptBody {
