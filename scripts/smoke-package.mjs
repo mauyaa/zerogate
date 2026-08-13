@@ -6,13 +6,14 @@
  * `files`, the `exports` map, the type declarations, and the `bin` entry are all
  * things a passing test suite in this repo cannot verify.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const isWindows = process.platform === "win32";
+const npm = isWindows ? "npm.cmd" : "npm";
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -29,6 +30,25 @@ const workDir = mkdtempSync(join(tmpdir(), "zerogate-smoke-"));
 let failed = false;
 
 try {
+  // `npm pack` and `npm publish` normalise the manifest differently: pack keeps
+  // fields that publish silently drops. A leading "./" in a bin path was
+  // accepted by pack and stripped by publish, which would have shipped a
+  // package with no `zerogate` command at all. Only a dry-run publish sees it.
+  // npm writes these notices to stderr, so both streams have to be inspected.
+  const dryRun = spawnSync(npm, ["publish", "--dry-run"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    shell: npm.endsWith(".cmd")
+  });
+  const corrections = `${dryRun.stdout ?? ""}${dryRun.stderr ?? ""}`.match(
+    /^.*(?:invalid and removed|auto-corrected).*$/gim
+  );
+  if (corrections !== null) {
+    throw new Error(
+      `npm would rewrite the published manifest:\n${corrections.map((line) => `  ${line.trim()}`).join("\n")}`
+    );
+  }
+
   const packOutput = run(npm, ["pack", "--json", "--pack-destination", workDir], {
     cwd: repoRoot
   });
@@ -132,21 +152,25 @@ console.log(JSON.stringify(checks));
   );
 
   const libraryOutput = run(process.execPath, ["use.mjs"], { cwd: workDir });
-  const cliHelp = run(process.execPath, [join(workDir, "node_modules", "zerogate", "bin", "zerogate.js"), "--help"], {
-    cwd: workDir
-  });
+
+  // Exercise the command through the `bin` linkage npm created, not by file
+  // path. Running the file directly passes even when the bin entry is missing,
+  // which is how a dropped bin field stayed invisible.
+  const binShim = join(workDir, "node_modules", ".bin", isWindows ? "zerogate.cmd" : "zerogate");
+  if (!existsSync(binShim)) {
+    throw new Error(
+      `installing the package did not create ${binShim}; 'npx zerogate' would not work`
+    );
+  }
+
+  const cliHelp = run(binShim, ["--help"], { cwd: workDir });
   if (!cliHelp.includes("zerogate receipt verify")) {
     throw new Error("the installed CLI did not print its usage");
   }
 
   const digest = run(
-    process.execPath,
-    [
-      join(workDir, "node_modules", "zerogate", "bin", "zerogate.js"),
-      "contract",
-      "digest",
-      join(workDir, "node_modules", "zerogate", "package.json")
-    ],
+    binShim,
+    ["contract", "digest", join(workDir, "node_modules", "zerogate", "package.json")],
     { cwd: workDir }
   ).trim();
   if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {

@@ -39,7 +39,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "zerogate": "./bin/zerogate.js"
+    "zerogate": "bin/zerogate.js"
   },
   "files": [
     "bin",
