@@ -178,6 +178,37 @@ test("typography and buttons follow the design system", async () => {
   assert.match(css, /\.eyebrow\s*\{[^}]*color:\s*var\(--color-accent\)/s);
 });
 
+test("the wordmark keeps its accessible name and takes colour from tokens", async () => {
+  const [shell, css] = await Promise.all([
+    read("components/site-shell.tsx"),
+    read("app/globals.css"),
+  ]);
+
+  // The ring replaces a letter, so the name must still be announced whole.
+  assert.match(shell, /aria-label="ZeroGate"/, "the wordmark needs an accessible name");
+  assert.match(shell, /role="img"/);
+  // Every inline SVG in the shell is decorative; names come from the wrappers.
+  const svgTags = [...shell.matchAll(/<svg\b[^>]*>/g)].map(([tag]) => tag);
+  assert.ok(svgTags.length >= 2, "expected the mark and the ring");
+  for (const tag of svgTags) {
+    assert.match(
+      tag,
+      /aria-hidden="true"/,
+      `a decorative svg is exposed to assistive technology: ${tag.slice(0, 60)}`
+    );
+  }
+
+  // The accent arc must come from the token, never a literal colour.
+  assert.match(shell, /stroke="var\(--color-accent\)"/);
+
+  // Sized in em so it scales with the surrounding text at any font size.
+  assert.match(css, /\.wordmark__ring\s*\{[^}]*width:\s*[\d.]+em/s);
+  assert.match(css, /\.wordmark__ring\s*\{[^}]*height:\s*[\d.]+em/s);
+
+  // The original symbol is still part of the lockup.
+  assert.match(shell, /viewBox="0 0 111 115"/, "the original mark must not be dropped");
+});
+
 test("the shell is light-only, accessible, and motion-safe", async () => {
   const [layout, css, shell, icon] = await Promise.all([
     read("app/layout.tsx"),

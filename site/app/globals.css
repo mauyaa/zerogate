@@ -299,9 +299,7 @@ kbd {
   align-items: center;
   gap: var(--space-3);
   color: var(--color-text-primary);
-  font-size: var(--text-base);
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-size: var(--text-lg);
 }
 
 .brand:hover {
@@ -312,6 +310,28 @@ kbd {
   width: 20px;
   height: 21px;
   flex: none;
+}
+
+/* The ring replaces a lowercase "o", so it is sized and nudged in `em` to sit
+   on the baseline with the surrounding letters at any font size. */
+.wordmark {
+  display: inline-block;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.wordmark__ring {
+  width: 0.66em;
+  height: 0.66em;
+  vertical-align: -0.085em;
+  /* Optical spacing: the ring is geometrically round where the typeface's "o"
+     is slightly narrowed, so it needs a touch less room either side. */
+  margin-inline: -0.012em;
+}
+
+.footer-brand .brand {
+  font-size: var(--text-base);
 }
 
 .desktop-nav {

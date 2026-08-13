@@ -22,8 +22,8 @@ const footerLinks = [
 ] as const;
 
 /**
- * The ZeroGate mark, drawn from the supplied artwork's own geometry so it stays
- * crisp at every size and inherits the surrounding text colour.
+ * The original ZeroGate mark, drawn from the supplied artwork's own geometry so
+ * it stays crisp at every size and inherits the surrounding text colour.
  */
 export function LogoMark() {
   return (
@@ -44,11 +44,63 @@ export function LogoMark() {
   );
 }
 
+/**
+ * The ring that stands in for the "o" in Zero.
+ *
+ * Drawn rather than embedded so it stays crisp at any size, costs no request,
+ * and takes its colours from the theme tokens. The accent arc is a quarter turn
+ * starting at twelve o'clock: a gate part-way open, and a check still running.
+ */
+const RING_RADIUS = 9;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const ARC_SWEEP = RING_CIRCUMFERENCE / 4;
+
+export function RingGlyph() {
+  return (
+    <svg className="wordmark__ring" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle
+        cx="12"
+        cy="12"
+        r={RING_RADIUS}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3.2"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r={RING_RADIUS}
+        fill="none"
+        stroke="var(--color-accent)"
+        strokeWidth="3.2"
+        strokeLinecap="round"
+        strokeDasharray={`${ARC_SWEEP} ${RING_CIRCUMFERENCE - ARC_SWEEP}`}
+        transform="rotate(-90 12 12)"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The wordmark. Real text either side of the ring, with the whole thing
+ * labelled so assistive technology reads "ZeroGate" and never "Zer Gate".
+ */
+export function Wordmark() {
+  return (
+    <span className="wordmark" role="img" aria-label="ZeroGate">
+      <span aria-hidden="true">Zer</span>
+      <RingGlyph />
+      <span aria-hidden="true">Gate</span>
+    </span>
+  );
+}
+
+/** The lockup: the original symbol alongside the wordmark. */
 export function Brand() {
   return (
     <Link className="brand" href="/">
       <LogoMark />
-      <span>ZeroGate</span>
+      <Wordmark />
     </Link>
   );
 }
