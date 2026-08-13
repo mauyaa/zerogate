@@ -40,6 +40,7 @@ export {
   type DefinedPreflight,
   type DispatchContext,
   type DispatchOutcome,
+  type DispatchResult,
   type EffectDefinition,
   type EvidenceContext,
   type ProviderState
@@ -48,6 +49,9 @@ export {
 export {
   DEFAULT_POLICY_VERSION,
   TransactionEngine,
+  assertCommitted,
+  type Recovery,
+  type Refusal,
   type RunInput,
   type TransactionResult,
   type WitnessSummary
@@ -109,12 +113,16 @@ export type {
   ActionState,
   Actor,
   DispatchEvidence,
+  DispatchObservation,
   Finality,
   IntentEnvelope,
   IntentLimits,
   JsonValue,
+  ManualRecoveryItem,
   MaterialDiff,
+  Observation,
   OutcomeClassification,
+  ReconciliationObservation,
   PublicLedgerEvent,
   Reconciliation,
   RecoveryPlan,
@@ -126,5 +134,6 @@ export type {
   StoredLedgerEvent,
   TransactionRuntimeRecord,
   TransactionState,
-  Verification
+  Verification,
+  VerificationObservation
 } from "./core/types.js";

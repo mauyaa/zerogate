@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Awaitable, EffectAdapter, Preflight } from "./adapter.js";
 import { ApprovalAuthority, type SignedApproval } from "./approval.js";
 import { hashCanonical, toJsonValue } from "./canonical-json.js";
-import { ZeroGateError } from "./errors.js";
+import { ZeroGateError, type ErrorCode } from "./errors.js";
 import {
   InMemoryEventLedger,
   type AppendEventInput,
@@ -18,31 +18,78 @@ import type {
   IntentEnvelope,
   IntentLimits,
   JsonValue,
+  ManualRecoveryItem,
+  Observation,
+  ResourceScope,
   SignedReceipt,
-  StateWitness,
   StoredLedgerEvent,
   TransactionRuntimeRecord,
-  TransactionState
+  TransactionState,
+  WitnessSummary
 } from "./types.js";
 
-export interface WitnessSummary {
-  observedAt: string;
-  providerVersion: string;
-  stateHash: string;
-  strength: StateWitness<unknown>["strength"];
+export type { WitnessSummary } from "./types.js";
+
+/** Why a transaction was refused before anything left the process. */
+export interface Refusal {
+  code: ErrorCode;
+  message: string;
+  retryable: boolean;
+  /** Always false. A refusal happens before the dispatch boundary. */
+  dispatched: false;
+  /** The original error, when one was thrown rather than returned. */
+  cause?: unknown;
+}
+
+/** What a human needs in order to resolve an unfinished transaction. */
+export interface Recovery {
+  reason: string;
+  instruction: string;
+  /** Ask the provider about this identifier; it is what evidence is keyed by. */
+  logicalOperationId: string;
+  resource: string;
+  /**
+   * Whether the effect may already have landed. False only when the provider
+   * definitively rejected the request, so nothing can have committed.
+   */
+  effectMayHaveCommitted: boolean;
+  /**
+   * Whether authoritative state currently matches what the effect intended.
+   * `true` with `effectMayHaveCommitted` means the change is present but
+   * unattributed — something produced it, and the provider cannot say what.
+   */
+  observedMatchesExpected?: boolean;
 }
 
 export interface TransactionResult {
   transaction: TransactionRuntimeRecord;
   action: ActionRuntimeRecord;
+  /**
+   * Whether the intended effect is verified as committed against authoritative
+   * provider state. Check this — every other outcome, including the ones that
+   * mean "we do not know whether this happened", returns normally.
+   */
+  committed: boolean;
+  /** One line describing the outcome, safe to log verbatim. */
+  summary: string;
+  /** Present when the transaction was refused before dispatch. */
+  refusal?: Refusal;
+  /** Present when the transaction ended in `MANUAL_RECOVERY_REQUIRED`. */
+  recovery?: Recovery;
   preview: {
     diff: Array<Record<string, JsonValue>>;
-    witness: WitnessSummary;
+    witness: WitnessSummary | null;
     payloadHash: string;
     actionSetRoot: string;
   };
   receipt: SignedReceipt;
   receiptPublicKeyPem: string;
+  /**
+   * `ephemeral` when the signing key was generated for this process and is now
+   * gone, which makes the receipt unverifiable by anyone else. Supply a
+   * `receiptSigner` built from a retained key to get `retained`.
+   */
+  receiptKeyRetention: "ephemeral" | "retained";
   events: StoredLedgerEvent[];
   /** Redacted summary of authoritative provider state at the terminal step. */
   finalState: Record<string, JsonValue>;
@@ -53,6 +100,29 @@ export interface TransactionResult {
   forwardDispatchCount: number;
   reconciliationUsed: boolean;
   notes: string[];
+}
+
+/**
+ * Throws unless the effect is verified as committed.
+ *
+ * For callers that would rather handle one exception than a state machine.
+ * The thrown error carries the original cause when there was one, so a bug in
+ * an effect definition still arrives with its stack intact.
+ */
+export function assertCommitted(result: TransactionResult): void {
+  if (result.committed) return;
+  const error = new ZeroGateError(
+    result.refusal?.code ?? "OUTCOME_UNRESOLVED",
+    result.summary,
+    result.refusal?.retryable ?? false,
+    {
+      transactionId: result.transaction.transactionId,
+      state: result.transaction.state,
+      ...(result.recovery === undefined ? {} : { recovery: result.recovery })
+    }
+  );
+  if (result.refusal?.cause !== undefined) error.cause = result.refusal.cause;
+  throw error;
 }
 
 export interface RunInput<TInput> {
@@ -114,6 +184,44 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Wraps anything an effect definition throws.
+ *
+ * A provider outcome arrives as a `ZeroGateError` and keeps its meaning. Any
+ * other throw is a fault in the definition, and it is recorded as one rather
+ * than being mistaken for something the provider said.
+ */
+function asZeroGateError(error: unknown): ZeroGateError {
+  if (error instanceof ZeroGateError) return error;
+  return new ZeroGateError("ADAPTER_FAILED", errorMessage(error), false);
+}
+
+/** Names the resource a human would go and look at. */
+function describeResource(scope: ResourceScope | undefined, fallback: string): string {
+  return scope === undefined ? fallback : `${scope.type}:${scope.id}`;
+}
+
+let ephemeralKeyWarningEmitted = false;
+
+/**
+ * Says once, out loud, that these receipts cannot be verified by anyone else.
+ *
+ * The default is convenient and silently worthless for audit, which is exactly
+ * the combination that reaches production unnoticed.
+ */
+function warnAboutEphemeralSigningKey(): void {
+  if (ephemeralKeyWarningEmitted) return;
+  if (process.env["ZEROGATE_EPHEMERAL_KEY_WARNING"] === "off") return;
+  ephemeralKeyWarningEmitted = true;
+  process.emitWarning(
+    "TransactionEngine is signing receipts with an ephemeral key that dies with this " +
+      "process, so nobody will be able to verify them later. Pass receiptSigner: " +
+      "ReceiptSigner.fromPem(...) with a retained key, or set " +
+      "ZEROGATE_EPHEMERAL_KEY_WARNING=off if that is intended.",
+    { code: "ZEROGATE_EPHEMERAL_RECEIPT_KEY" }
+  );
+}
+
+/**
  * Executes one provider effect as a verified transaction.
  *
  * The engine is deliberately ignorant of the provider. Everything it knows
@@ -132,17 +240,27 @@ export class TransactionEngine<
   public readonly ledger: EventLedger;
   public readonly approvalAuthority: ApprovalAuthority;
   public readonly receiptSigner: ReceiptSigner;
+  /** Whether receipts from this engine can outlive the process that made them. */
+  public readonly receiptKeyRetention: "ephemeral" | "retained";
 
   public constructor(input: {
     adapter: EffectAdapter<TInput, TPreflight, TState, TResult, TRecovery>;
     ledger?: EventLedger;
     approvalAuthority?: ApprovalAuthority;
-    receiptSigner?: ReceiptSigner;
+    /**
+     * A signer built from a retained key, or the literal `"ephemeral"` to
+     * accept unverifiable receipts deliberately and without the warning.
+     */
+    receiptSigner?: ReceiptSigner | "ephemeral";
   }) {
     this.adapter = input.adapter;
     this.ledger = input.ledger ?? new InMemoryEventLedger();
     this.approvalAuthority = input.approvalAuthority ?? new ApprovalAuthority();
-    this.receiptSigner = input.receiptSigner ?? new ReceiptSigner();
+    const signer = input.receiptSigner;
+    this.receiptSigner = signer instanceof ReceiptSigner ? signer : new ReceiptSigner();
+    this.receiptKeyRetention = signer instanceof ReceiptSigner ? "retained" : "ephemeral";
+    // Saying "ephemeral" out loud is an informed choice; saying nothing is not.
+    if (signer === undefined) warnAboutEphemeralSigningKey();
   }
 
   private async appendEvent(input: AppendEventInput): Promise<StoredLedgerEvent> {
@@ -217,12 +335,14 @@ export class TransactionEngine<
       residualRisk: [...this.adapter.residualRisk]
     };
     const approvals: Array<Record<string, JsonValue>> = [];
-    const manualRecovery: Array<Record<string, JsonValue>> = [];
+    const manualRecovery: ManualRecoveryItem[] = [];
     const providerRequestIds: string[] = [];
     const notes: string[] = [];
     let reconciliationUsed = false;
     let forwardDispatchCount = 0;
     let actionFinality: Finality = "UNKNOWN";
+    let refusal: Refusal | undefined;
+    const resourceLabel = describeResource(intent.resourceScope[0], this.adapter.operation);
 
     await this.appendEvent({
       type: "dev.zerogate.transaction.created.v1",
@@ -269,40 +389,78 @@ export class TransactionEngine<
     await transitionTransaction("PREFLIGHTING", "Authoritative preflight started");
     await transitionAction("PREFLIGHTING", "Provider state observation started");
 
-    let preflight: TPreflight;
+    // Anything the definition throws here is still an outcome: it happened
+    // before the dispatch boundary, so it ends as a signed refusal rather than
+    // an exception with no record of what was refused.
+    let evaluated: TPreflight | undefined;
     let preflightRejection: ZeroGateError | undefined;
+    let preflightCause: unknown;
     try {
       const evaluation = await this.adapter.evaluatePreflight(canonicalInput);
-      preflight = evaluation.preflight;
+      evaluated = evaluation.preflight;
       preflightRejection = evaluation.rejection;
     } catch (error: unknown) {
-      await transitionAction("PREFLIGHT_REJECTED", "Preflight failed");
-      await transitionTransaction("PREFLIGHT_FAILED", "Preflight failed");
-      throw error;
+      preflightRejection = asZeroGateError(error);
+      preflightCause = error;
+    }
+
+    let evidenceDiff: Array<Record<string, JsonValue>> = [];
+    if (evaluated !== undefined && preflightRejection === undefined) {
+      try {
+        evidenceDiff = this.adapter.evidenceDiff(evaluated);
+      } catch (error: unknown) {
+        // The credential guard refuses here. Refusing is the outcome.
+        preflightRejection = asZeroGateError(error);
+        preflightCause = error;
+      }
+    }
+
+    /** The witness as evidence records it: the observed state itself never travels. */
+    const witnessSummary = (source: TPreflight): WitnessSummary => ({
+      observedAt: source.witness.observedAt,
+      providerVersion: source.witness.providerVersion,
+      stateHash: source.witness.stateHash,
+      strength: source.witness.strength
+    });
+    const witnessEvidence: WitnessSummary | null =
+      evaluated === undefined ? null : witnessSummary(evaluated);
+
+    // `EffectAdapter` is a public interface, so a third-party adapter can
+    // return neither a preview nor a rejection. That breaks its contract — but
+    // the caller still gets an outcome and a receipt, not a bare throw.
+    if (evaluated === undefined && preflightRejection === undefined) {
+      preflightRejection = new ZeroGateError(
+        "ADAPTER_FAILED",
+        `Adapter '${this.adapter.operation}' returned neither a preview nor a rejection`,
+        false
+      );
     }
 
     const finish = (): Promise<TransactionResult> =>
       this.finishResult({
         transaction,
         action,
-        preflight,
+        preflight: evaluated,
+        previewDiff: evidenceDiff,
+        previewWitness: witnessEvidence,
         approvals,
         manualRecovery,
         providerRequestIds,
         actionFinality,
         notes,
         reconciliationUsed,
-        forwardDispatchCount
+        forwardDispatchCount,
+        refusal,
+        resourceLabel
       });
-    if (preflightRejection !== undefined) {
-      await transitionAction("PREFLIGHT_REJECTED", "Preflight failed");
-      await transitionTransaction("PREFLIGHT_FAILED", "Preflight failed");
-    }
 
-    action = { ...action, payloadHash: preflight.payloadHash };
+    action = {
+      ...action,
+      payloadHash: evaluated?.payloadHash ?? hashCanonical(canonicalInput)
+    };
     const resourceWitnessHash = hashCanonical({
-      providerVersion: preflight.witness.providerVersion,
-      stateHash: preflight.witness.stateHash
+      providerVersion: witnessEvidence?.providerVersion ?? "unobserved",
+      stateHash: witnessEvidence?.stateHash ?? "unobserved"
     });
     const intentHash = hashCanonical(intent);
     const actionSetRoot = hashCanonical({
@@ -324,26 +482,27 @@ export class TransactionEngine<
       expiresAt: intent.expiresAt
     });
     transaction = { ...transaction, actionSetRoot };
-    const evidenceDiff = this.adapter.evidenceDiff(preflight);
-    const witnessEvidence: WitnessSummary = {
-      observedAt: preflight.witness.observedAt,
-      providerVersion: preflight.witness.providerVersion,
-      stateHash: preflight.witness.stateHash,
-      strength: preflight.witness.strength
-    };
     if (preflightRejection !== undefined) {
-      action.observations.push(
-        asEventData({
-          kind: "preflight-rejection",
-          reasonCode: preflightRejection.code,
-          retryable: preflightRejection.retryable,
-          dispatchBoundaryCrossed: false,
-          witness: witnessEvidence
-        })
-      );
+      await transitionAction("PREFLIGHT_REJECTED", "Preflight failed");
+      await transitionTransaction("PREFLIGHT_FAILED", "Preflight failed");
+      action.observations.push({
+        kind: "preflight-rejection",
+        reasonCode: preflightRejection.code,
+        reason: preflightRejection.message,
+        retryable: preflightRejection.retryable,
+        dispatchBoundaryCrossed: false,
+        witness: witnessEvidence
+      });
       notes.push(
-        `Preflight rejected (${preflightRejection.code}); no provider request was dispatched.`
+        `Preflight rejected (${preflightRejection.code}): ${preflightRejection.message} Nothing was dispatched.`
       );
+      refusal = {
+        code: preflightRejection.code,
+        message: preflightRejection.message,
+        retryable: preflightRejection.retryable,
+        dispatched: false,
+        ...(preflightCause === undefined ? {} : { cause: preflightCause })
+      };
       await this.appendEvent({
         type: "dev.zerogate.action.preflight_rejected.v1",
         subject: transactionId,
@@ -351,6 +510,7 @@ export class TransactionEngine<
         data: asEventData({
           actionId,
           reasonCode: preflightRejection.code,
+          reason: preflightRejection.message,
           retryable: preflightRejection.retryable,
           payloadHash: action.payloadHash,
           actionSetRoot,
@@ -361,13 +521,17 @@ export class TransactionEngine<
       actionFinality = "VERIFIED";
       return finish();
     }
-    action.observations.push(
-      asEventData({
-        kind: "preflight",
-        witness: witnessEvidence,
-        diff: evidenceDiff
-      })
-    );
+
+    if (evaluated === undefined) {
+      // Unreachable: the guard above turned this into a rejection that returned.
+      throw new Error("Preflight produced neither a preview nor a rejection");
+    }
+    const preflight: TPreflight = evaluated;
+    action.observations.push({
+      kind: "preflight",
+      witness: witnessSummary(preflight),
+      diff: evidenceDiff
+    });
     await this.appendEvent({
       type: "dev.zerogate.action.preflighted.v1",
       subject: transactionId,
@@ -412,14 +576,13 @@ export class TransactionEngine<
       ) {
         throw error;
       }
-      action.observations.push(
-        asEventData({
-          kind: "approval-rejection",
-          reasonCode: error.code,
-          retryable: error.retryable,
-          dispatchBoundaryCrossed: false
-        })
-      );
+      action.observations.push({
+        kind: "approval-rejection",
+        reasonCode: error.code,
+        reason: error.message,
+        retryable: error.retryable,
+        dispatchBoundaryCrossed: false
+      });
       await this.appendEvent({
         type: "dev.zerogate.approval.rejected.v1",
         subject: transactionId,
@@ -427,13 +590,20 @@ export class TransactionEngine<
         data: asEventData({
           actionId,
           reasonCode: error.code,
+          reason: error.message,
           retryable: error.retryable,
           dispatchBoundaryCrossed: false
         })
       });
       await transitionAction("CANCELLED", "Approval was rejected before dispatch");
       await transitionTransaction("APPROVAL_DENIED", "Approval was rejected before dispatch");
-      notes.push(`Approval rejected (${error.code}); no provider request was dispatched.`);
+      notes.push(`Approval rejected (${error.code}): ${error.message} Nothing was dispatched.`);
+      refusal = {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        dispatched: false
+      };
       actionFinality = "VERIFIED";
       return finish();
     }
@@ -469,15 +639,14 @@ export class TransactionEngine<
       if (!(error instanceof ZeroGateError) || error.code !== "STALE_WITNESS") throw error;
       // The approved preview no longer describes reality. Nothing has been
       // dispatched, so this ends as a terminal receipt rather than an exception.
-      action.observations.push(
-        asEventData({
-          kind: "staleness-rejection",
-          reasonCode: error.code,
-          retryable: error.retryable,
-          dispatchBoundaryCrossed: false,
-          details: toJsonValue(error.details)
-        })
-      );
+      action.observations.push({
+        kind: "staleness-rejection",
+        reasonCode: error.code,
+        reason: error.message,
+        retryable: error.retryable,
+        dispatchBoundaryCrossed: false,
+        details: toJsonValue(error.details)
+      });
       await this.appendEvent({
         type: "dev.zerogate.action.staleness_rejected.v1",
         subject: transactionId,
@@ -495,6 +664,12 @@ export class TransactionEngine<
       notes.push(
         `Aborted before dispatch (${error.code}): ${error.message}. A fresh preview and approval are required.`
       );
+      refusal = {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        dispatched: false
+      };
       actionFinality = "VERIFIED";
       return finish();
     }
@@ -524,14 +699,14 @@ export class TransactionEngine<
         attemptId: forwardAttemptId
       });
       if (evidence.providerRequestId !== undefined) providerRequestIds.push(evidence.providerRequestId);
-      const dispatchObservation = asEventData({
+      const dispatchObservation: Observation = {
         kind: "dispatch",
         logicalOperationId: evidence.logicalOperationId,
         attemptId: evidence.attemptId,
         providerRequestId: evidence.providerRequestId ?? null,
         classification: evidence.classification,
         observedAt: evidence.observedAt
-      });
+      };
       action.observations.push(dispatchObservation);
       await this.appendEvent({
         type: "dev.zerogate.action.dispatch_reported.v1",
@@ -541,14 +716,30 @@ export class TransactionEngine<
       });
       await transitionAction("REPORTED_SUCCEEDED", "Provider reported success");
     } catch (error: unknown) {
-      if (error instanceof ZeroGateError && error.code === "PROVIDER_TIMEOUT_AFTER_DISPATCH") {
-        await transitionAction("OUTCOME_UNKNOWN", "Acknowledgement was lost after dispatch");
+      // A definition that classified the failure is believed. A definition that
+      // threw something unclassified has told us nothing — and the request may
+      // already have left, so the only honest reading is "unknown". Calling it
+      // a rejection would assert that nothing committed, without evidence.
+      const unclassified = !(error instanceof ZeroGateError);
+      if (unclassified || error.code === "PROVIDER_TIMEOUT_AFTER_DISPATCH") {
+        await transitionAction(
+          "OUTCOME_UNKNOWN",
+          unclassified
+            ? "Dispatch threw an unclassified error, so the outcome is unknown"
+            : "Acknowledgement was lost after dispatch"
+        );
         await transitionTransaction("RECONCILING", "Unknown outcome blocks ordinary retry");
         reconciliationUsed = true;
-        notes.push("No blind retry was attempted after the lost acknowledgement.");
+        notes.push(
+          unclassified
+            ? `Dispatch threw an error it did not classify (${errorMessage(error)}), so the ` +
+              "outcome is treated as unknown and reconciled rather than assumed. Throw " +
+              "ProviderSafeToRetryError or ProviderTimeoutAfterDispatchError to say which it was."
+            : "No blind retry was attempted after the lost acknowledgement."
+        );
         await transitionAction("RECONCILING", "Querying provider operation evidence and state");
         const reconciliation = await this.adapter.reconcile(preflight, logicalOperationId);
-        const reconciliationObservation = asEventData({
+        const reconciliationObservation: Observation = {
           kind: "reconciliation",
           resolved: reconciliation.resolved,
           committed: reconciliation.committed,
@@ -558,7 +749,7 @@ export class TransactionEngine<
             reconciliation.observed === undefined
               ? null
               : this.adapter.observationSummary(preflight, reconciliation.observed)
-        });
+        };
         action.observations.push(reconciliationObservation);
         await this.appendEvent({
           type: "dev.zerogate.action.reconciled.v1",
@@ -577,23 +768,41 @@ export class TransactionEngine<
             "Unknown provider outcome could not be resolved"
           );
           actionFinality = "UNKNOWN";
-          manualRecovery.push(
-            asEventData({
-              actionId,
-              reason: reconciliation.reason,
-              instruction: "Inspect authoritative provider state before any retry or recovery action."
-            })
-          );
+          manualRecovery.push({
+            actionId,
+            reason: reconciliation.reason,
+            instruction:
+              `Ask the provider what happened to operation ${logicalOperationId} before retrying ` +
+              `or correcting ${resourceLabel} by hand. ZeroGate will not dispatch it again.`
+          });
           return finish();
         }
         providerRequestIds.push(...(reconciliation.providerRequestIds ?? []));
         await transitionAction("REPORTED_SUCCEEDED", "Reconciliation proved the provider committed once");
         await transitionTransaction("VERIFYING", "Reconciled effect requires postcondition verification");
       } else {
-        await transitionAction("PROVIDER_REJECTED", "Provider definitively rejected the request");
-        await transitionTransaction("FAILURE_DETECTED", "Provider rejected the required action");
+        // Both endings mean nothing committed, and they mean it for opposite
+        // reasons. An operator sent looking for a provider-side rejection that
+        // never happened has been misled by the receipt.
+        const neverReachedProvider = error.code === "PROVIDER_SAFE_TO_RETRY";
+        await transitionAction(
+          "PROVIDER_REJECTED",
+          neverReachedProvider
+            ? "The request was never dispatched to the provider"
+            : "Provider definitively rejected the request"
+        );
+        await transitionTransaction("FAILURE_DETECTED", "The required action did not commit");
         actionFinality = "VERIFIED";
-        manualRecovery.push(asEventData({ actionId, reason: errorMessage(error) }));
+        manualRecovery.push({
+          actionId,
+          reason: errorMessage(error),
+          instruction: neverReachedProvider
+            ? `The request never reached the provider, so nothing committed and there is ` +
+              `nothing to undo. ${resourceLabel} is untouched; run a fresh transaction once the ` +
+              `provider is reachable.`
+            : `The provider rejected the request outright, so nothing committed and there is ` +
+              `nothing to undo. Fix the cause and run a fresh transaction against ${resourceLabel}.`
+        });
         await transitionTransaction("MANUAL_RECOVERY_REQUIRED", "No committed effect to compensate");
         return finish();
       }
@@ -605,13 +814,13 @@ export class TransactionEngine<
     await transitionAction("VERIFYING", "Reading authoritative provider state");
 
     const verification = await this.adapter.verify(preflight);
-    const verificationObservation = asEventData({
+    const verificationObservation: Observation = {
       kind: "verification",
       ok: verification.ok,
       finality: verification.finality,
       reason: verification.reason ?? null,
       observed: this.adapter.observationSummary(preflight, verification.observed)
-    });
+    };
     action.observations.push(verificationObservation);
     await this.appendEvent({
       type: "dev.zerogate.action.verified.v1",
@@ -660,12 +869,12 @@ export class TransactionEngine<
     await transitionTransaction("COMPENSATING", "Planning compensating action against current provider state");
 
     const recoveryPlan = await this.adapter.planRecovery(preflight);
-    const recoveryPlanObservation = asEventData({
+    const recoveryPlanObservation: Observation = {
       kind: "recovery_plan",
       safe: recoveryPlan.safe,
       reason: recoveryPlan.reason,
       payloadHash: recoveryPlan.payload === undefined ? null : hashCanonical(recoveryPlan.payload)
-    });
+    };
     action.observations.push(recoveryPlanObservation);
     await this.appendEvent({
       type: "dev.zerogate.recovery.planned.v1",
@@ -681,14 +890,14 @@ export class TransactionEngine<
         "Automatic compensation would overwrite newer or unverified provider state"
       );
       const currentState = await this.adapter.observeCurrentState(preflight);
-      manualRecovery.push(
-        asEventData({
-          actionId,
-          reason: recoveryPlan.reason,
-          currentState: this.adapter.observationSummary(preflight, currentState),
-          suggestedAction: "Review the current state and apply a human-approved corrective update."
-        })
-      );
+      manualRecovery.push({
+        actionId,
+        reason: recoveryPlan.reason,
+        currentState: this.adapter.observationSummary(preflight, currentState),
+        instruction:
+          `The effect committed and was not undone. Review ${resourceLabel} and apply a ` +
+          `human-approved corrective update; ZeroGate refused to overwrite state it does not own.`
+      });
       return finish();
     }
 
@@ -718,14 +927,14 @@ export class TransactionEngine<
       if (recoveryEvidence.providerRequestId !== undefined) {
         providerRequestIds.push(recoveryEvidence.providerRequestId);
       }
-      const recoveryDispatchObservation = asEventData({
+      const recoveryDispatchObservation: Observation = {
         kind: "compensation_dispatch",
         logicalOperationId: recoveryEvidence.logicalOperationId,
         attemptId: recoveryEvidence.attemptId,
         providerRequestId: recoveryEvidence.providerRequestId ?? null,
         classification: recoveryEvidence.classification,
         observedAt: recoveryEvidence.observedAt
-      });
+      };
       action.observations.push(recoveryDispatchObservation);
       await this.appendEvent({
         type: "dev.zerogate.recovery.dispatched.v1",
@@ -735,13 +944,23 @@ export class TransactionEngine<
       });
       await transitionAction("COMPENSATION_REPORTED_SUCCEEDED", "Provider reported compensation success");
     } catch (error: unknown) {
-      if (error instanceof ZeroGateError && error.code === "PROVIDER_TIMEOUT_AFTER_DISPATCH") {
+      // Same rule as the forward dispatch: an unclassified throw is not
+      // evidence that the compensation failed to land.
+      const unclassifiedRecovery = !(error instanceof ZeroGateError);
+      if (unclassifiedRecovery || error.code === "PROVIDER_TIMEOUT_AFTER_DISPATCH") {
         await transitionAction(
           "COMPENSATION_UNKNOWN",
-          "Compensation acknowledgement was lost after dispatch"
+          unclassifiedRecovery
+            ? "Compensation threw an unclassified error, so its outcome is unknown"
+            : "Compensation acknowledgement was lost after dispatch"
         );
         reconciliationUsed = true;
-        notes.push("Compensation entered unknown outcome and was reconciled before any retry.");
+        notes.push(
+          unclassifiedRecovery
+            ? `Compensation threw an error it did not classify (${errorMessage(error)}), so its ` +
+              "outcome is treated as unknown and reconciled rather than assumed."
+            : "Compensation entered unknown outcome and was reconciled before any retry."
+        );
         await transitionAction(
           "COMPENSATION_RECONCILING",
           "Querying provider evidence for the compensation operation"
@@ -751,7 +970,7 @@ export class TransactionEngine<
           recoveryPlan.payload,
           recoveryOperationId
         );
-        const recoveryReconciliationObservation = asEventData({
+        const recoveryReconciliationObservation: Observation = {
           kind: "compensation_reconciliation",
           resolved: recoveryReconciliation.resolved,
           committed: recoveryReconciliation.committed,
@@ -761,7 +980,7 @@ export class TransactionEngine<
             recoveryReconciliation.observed === undefined
               ? null
               : this.adapter.observationSummary(preflight, recoveryReconciliation.observed)
-        });
+        };
         action.observations.push(recoveryReconciliationObservation);
         await this.appendEvent({
           type: "dev.zerogate.recovery.reconciled.v1",
@@ -777,13 +996,13 @@ export class TransactionEngine<
           await transitionAction("COMPENSATION_FAILED", "Compensation outcome could not be resolved");
           await transitionTransaction("MANUAL_RECOVERY_REQUIRED", "Compensation outcome remains unknown");
           actionFinality = "UNKNOWN";
-          manualRecovery.push(
-            asEventData({
-              actionId,
-              reason: recoveryReconciliation.reason,
-              instruction: "Inspect authoritative provider state before any compensation retry."
-            })
-          );
+          manualRecovery.push({
+            actionId,
+            reason: recoveryReconciliation.reason,
+            instruction:
+              `Ask the provider what happened to compensation ${recoveryOperationId} before ` +
+              `touching ${resourceLabel}. The forward effect committed; the undo may also have.`
+          });
           return finish();
         }
         providerRequestIds.push(...(recoveryReconciliation.providerRequestIds ?? []));
@@ -797,13 +1016,13 @@ export class TransactionEngine<
           "MANUAL_RECOVERY_REQUIRED",
           "Provider state changed before conditional compensation"
         );
-        manualRecovery.push(
-          asEventData({
-            actionId,
-            reason: error.message,
-            instruction: "Review current provider state; automatic compensation was not dispatched."
-          })
-        );
+        manualRecovery.push({
+          actionId,
+          reason: error.message,
+          instruction:
+            `Review ${resourceLabel} by hand. The compensation was never dispatched, because ` +
+            `state moved and undoing would have overwritten someone else's change.`
+        });
         return finish();
       } else {
         await transitionAction("COMPENSATION_FAILED", errorMessage(error));
@@ -811,13 +1030,13 @@ export class TransactionEngine<
           "MANUAL_RECOVERY_REQUIRED",
           "Compensation dispatch did not produce a verified recovery"
         );
-        manualRecovery.push(
-          asEventData({
-            actionId,
-            reason: errorMessage(error),
-            instruction: "Inspect provider evidence and continue from the recovery packet."
-          })
-        );
+        manualRecovery.push({
+          actionId,
+          reason: errorMessage(error),
+          instruction:
+            `The compensation failed outright. The forward effect is still in place on ` +
+            `${resourceLabel}; decide by hand whether to undo it.`
+        });
         return finish();
       }
     }
@@ -826,13 +1045,13 @@ export class TransactionEngine<
     await transitionTransaction("VERIFYING_RECOVERY", "Recovery must be verified before terminal success");
 
     const recoveryVerification = await this.adapter.verifyRecovery(preflight, recoveryPlan.payload);
-    const recoveryVerificationObservation = asEventData({
+    const recoveryVerificationObservation: Observation = {
       kind: "recovery_verification",
       ok: recoveryVerification.ok,
       finality: recoveryVerification.finality,
       reason: recoveryVerification.reason ?? null,
       observed: this.adapter.observationSummary(preflight, recoveryVerification.observed)
-    });
+    };
     action.observations.push(recoveryVerificationObservation);
     await this.appendEvent({
       type: "dev.zerogate.recovery.verified.v1",
@@ -850,13 +1069,13 @@ export class TransactionEngine<
         "Provider state did not prove successful recovery"
       );
       actionFinality = recoveryVerification.finality;
-      manualRecovery.push(
-        asEventData({
-          actionId,
-          reason: recoveryVerification.reason ?? "Recovery verification failed",
-          instruction: "Inspect the provider state and continue from the recovery packet."
-        })
-      );
+      manualRecovery.push({
+        actionId,
+        reason: recoveryVerification.reason ?? "Recovery verification failed",
+        instruction:
+          `The compensation was dispatched but ${resourceLabel} does not prove it landed. ` +
+          `Read the provider state before dispatching anything else.`
+      });
     } else {
       await transitionAction("VERIFIED_COMPENSATED", "Authoritative state proves the recovery postcondition");
       await transitionTransaction("VERIFIED_COMPENSATED", "All required compensations verified");
@@ -869,14 +1088,19 @@ export class TransactionEngine<
   private async finishResult(input: {
     transaction: TransactionRuntimeRecord;
     action: ActionRuntimeRecord;
-    preflight: TPreflight;
+    /** Absent when the preview itself could not be built. */
+    preflight: TPreflight | undefined;
+    previewDiff: Array<Record<string, JsonValue>>;
+    previewWitness: WitnessSummary | null;
     approvals: Array<Record<string, JsonValue>>;
-    manualRecovery: Array<Record<string, JsonValue>>;
+    manualRecovery: ManualRecoveryItem[];
     providerRequestIds: string[];
     actionFinality: Finality;
     notes: string[];
     reconciliationUsed: boolean;
     forwardDispatchCount: number;
+    refusal: Refusal | undefined;
+    resourceLabel: string;
   }): Promise<TransactionResult> {
     const terminal = input.transaction.state;
     if (!TERMINAL_TRANSACTION_STATES.has(terminal)) {
@@ -953,31 +1177,134 @@ export class TransactionEngine<
       })
     });
     const events = await this.ledger.list(input.transaction.transactionId);
-    const finalState = this.adapter.observationSummary(
-      input.preflight,
-      await this.adapter.observeCurrentState(input.preflight)
-    );
+    const finalState = await this.observeFinalState(input.preflight);
+    const recovery = buildRecovery({
+      state: terminal,
+      action: input.action,
+      manualRecovery: input.manualRecovery,
+      resourceLabel: input.resourceLabel
+    });
     return {
       transaction: input.transaction,
       action: input.action,
+      committed: terminal === "VERIFIED_COMMITTED",
+      summary: summarize({
+        state: terminal as SignedReceipt["finalStatus"],
+        operation: input.action.operation,
+        resourceLabel: input.resourceLabel,
+        refusal: input.refusal,
+        recovery
+      }),
+      ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
+      ...(recovery === undefined ? {} : { recovery }),
       preview: {
-        diff: this.adapter.evidenceDiff(input.preflight),
-        witness: {
-          observedAt: input.preflight.witness.observedAt,
-          providerVersion: input.preflight.witness.providerVersion,
-          stateHash: input.preflight.witness.stateHash,
-          strength: input.preflight.witness.strength
-        },
-        payloadHash: input.preflight.payloadHash,
+        diff: input.previewDiff,
+        witness: input.previewWitness,
+        payloadHash: input.action.payloadHash,
         actionSetRoot: input.transaction.actionSetRoot
       },
       receipt,
       receiptPublicKeyPem: this.receiptSigner.publicKeyPem(),
+      receiptKeyRetention: this.receiptKeyRetention,
       events,
       finalState,
       forwardDispatchCount: input.forwardDispatchCount,
       reconciliationUsed: input.reconciliationUsed,
       notes: input.notes
     };
+  }
+
+  /**
+   * Reads provider state one last time for the result.
+   *
+   * This is reporting, not evidence: the transaction is already terminal and
+   * signed. A provider that cannot be read here must not turn a completed
+   * transaction into a thrown exception.
+   */
+  private async observeFinalState(
+    preflight: TPreflight | undefined
+  ): Promise<Record<string, JsonValue>> {
+    if (preflight === undefined) return {};
+    try {
+      return this.adapter.observationSummary(
+        preflight,
+        await this.adapter.observeCurrentState(preflight)
+      );
+    } catch (error: unknown) {
+      return { unavailable: errorMessage(error) };
+    }
+  }
+}
+
+/** Pulls the operator packet out of the recorded evidence, for the caller. */
+function buildRecovery(input: {
+  state: TransactionState;
+  action: ActionRuntimeRecord;
+  manualRecovery: ManualRecoveryItem[];
+  resourceLabel: string;
+}): Recovery | undefined {
+  if (input.state !== "MANUAL_RECOVERY_REQUIRED") return undefined;
+  const item = input.manualRecovery[0];
+  if (item === undefined) return undefined;
+  const reconciliation = [...input.action.observations]
+    .reverse()
+    .find(
+      (
+        observation
+      ): observation is Extract<
+        Observation,
+        { kind: "reconciliation" | "compensation_reconciliation" }
+      > =>
+        observation.kind === "reconciliation" || observation.kind === "compensation_reconciliation"
+    );
+  const observed = reconciliation?.observed;
+  const materialFields =
+    observed !== null && observed !== undefined && Array.isArray(observed["materialFields"])
+      ? (observed["materialFields"] as Array<{ matchesExpected?: boolean }>)
+      : undefined;
+  return {
+    reason: item.reason,
+    instruction: item.instruction,
+    logicalOperationId: input.action.logicalOperationId,
+    resource: input.resourceLabel,
+    // A definitive provider rejection is the one unresolved outcome where
+    // nothing can have landed.
+    effectMayHaveCommitted: input.action.state !== "PROVIDER_REJECTED",
+    // `every` on an empty list answers "yes" from nothing compared, which is
+    // the strongest of the three answers and the least earned. Stay silent.
+    ...(materialFields === undefined || materialFields.length === 0
+      ? {}
+      : {
+          observedMatchesExpected: materialFields.every((field) => field.matchesExpected === true)
+        })
+  };
+}
+
+/** One line an on-call engineer can read without opening the receipt. */
+function summarize(input: {
+  state: SignedReceipt["finalStatus"];
+  operation: string;
+  resourceLabel: string;
+  refusal: Refusal | undefined;
+  recovery: Recovery | undefined;
+}): string {
+  const subject = `${input.operation} on ${input.resourceLabel}`;
+  switch (input.state) {
+    case "VERIFIED_COMMITTED":
+      return `${subject} committed once and authoritative state proves it.`;
+    case "VERIFIED_COMPENSATED":
+      return `${subject} committed and was undone; authoritative state proves both.`;
+    case "PREFLIGHT_FAILED":
+    case "APPROVAL_DENIED":
+    case "ABORTED":
+      return `${subject} was refused before dispatch${
+        input.refusal === undefined ? "" : ` (${input.refusal.code}): ${input.refusal.message}`
+      }`;
+    case "MANUAL_RECOVERY_REQUIRED":
+      return input.recovery === undefined
+        ? `${subject} is unresolved and needs a human.`
+        : `${subject} needs a human: ${input.recovery.reason} ${input.recovery.instruction}`;
+    case "EXPIRED":
+      return `${subject} expired before it reached a terminal outcome.`;
   }
 }

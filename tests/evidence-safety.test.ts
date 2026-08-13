@@ -5,6 +5,7 @@ import { DocumentService } from "../examples/rest-resource/service.js";
 import {
   TransactionEngine,
   ZeroGateError,
+  assertCommitted,
   defineEffect,
   replayProjection,
   verifyEventChain
@@ -40,22 +41,32 @@ test("a credential in a recorded field is refused before anything is dispatched"
   const store: Secretish = { id: "n1", note: "harmless", version: 1 };
   const engine = new TransactionEngine({ adapter: credentialEffect(store) });
 
-  await assert.rejects(
-    () =>
-      engine.run({
-        input: { id: "n1", note: "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" },
-        actor: TEST_ACTOR,
-        purpose: "Store a note that happens to contain a credential"
-      }),
-    (error: unknown) =>
-      error instanceof ZeroGateError &&
-      error.code === "UNSUPPORTED" &&
-      error.message.includes("GitHub token") &&
-      error.message.includes("redactFields")
+  const result = await engine.run({
+    input: { id: "n1", note: "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" },
+    actor: TEST_ACTOR,
+    purpose: "Store a note that happens to contain a credential"
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.transaction.state, "PREFLIGHT_FAILED");
+  assert.equal(result.refusal?.dispatched, false);
+  assert.equal(result.refusal?.code, "UNSUPPORTED");
+  assert.ok(result.refusal?.message.includes("GitHub token"));
+  assert.ok(result.refusal?.message.includes("redactFields"));
+  assert.ok(
+    result.summary.includes("redactFields"),
+    "the one-line summary must carry the fix, not just a code"
   );
+  // A refusal is an outcome, so it is signed like any other.
+  assert.equal(result.receipt.finalStatus, "PREFLIGHT_FAILED");
+  assert.throws(() => assertCommitted(result), ZeroGateError);
 
   assert.equal(store.note, "harmless", "nothing may be dispatched when evidence is unsafe");
   assert.equal(store.version, 1);
+  assert.ok(
+    JSON.stringify(result.receipt).includes("ghp_") === false,
+    "the credential must not reach the receipt by any path"
+  );
 });
 
 test("the same field passes once it is declared redacted", async () => {

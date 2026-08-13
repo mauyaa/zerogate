@@ -71,8 +71,20 @@ async function verifyReceiptCommand(argv: readonly string[]): Promise<CommandRes
       event.data["receiptId"] === receipt.receiptId
   );
   if (receiptEventIndex < 0) {
+    // Same shape as the success path, so one parser reads either answer. The
+    // receipt is in hand; withholding what it says helps nobody.
     process.stdout.write(
-      `${JSON.stringify({ ok: false, reason: "receipt-issued event is missing" }, null, 2)}\n`
+      `${JSON.stringify(
+        {
+          finalStatus: receipt.finalStatus,
+          finality: receipt.finality,
+          authentic: false,
+          transactionId: receipt.transactionId,
+          reason: "receipt-issued event is missing"
+        },
+        null,
+        2
+      )}\n`
     );
     return { exitCode: 1 };
   }
@@ -91,16 +103,19 @@ async function verifyReceiptCommand(argv: readonly string[]): Promise<CommandRes
     receiptEvent.data["signatureHash"] === hashCanonical(receipt.integrity.signature) &&
     receiptEventIndex === subjectEvents.length - 1;
 
-  const ok =
+  const authentic =
     signatureValid && covered.valid && full.valid && rootMatches && receiptEventMatches;
 
+  // `finalStatus` leads, and the verdict is named `authentic` rather than `ok`,
+  // because they answer different questions: a receipt for a transaction that
+  // required a human is perfectly authentic.
   process.stdout.write(
     `${JSON.stringify(
       {
-        ok,
-        transactionId: receipt.transactionId,
         finalStatus: receipt.finalStatus,
         finality: receipt.finality,
+        authentic,
+        transactionId: receipt.transactionId,
         signatureValid,
         coveredEventChainValid: covered.valid,
         fullEventChainValid: full.valid,
@@ -112,7 +127,7 @@ async function verifyReceiptCommand(argv: readonly string[]): Promise<CommandRes
       2
     )}\n`
   );
-  return { exitCode: ok ? 0 : 1 };
+  return { exitCode: authentic ? 0 : 1 };
 }
 
 async function contractDigestCommand(argv: readonly string[]): Promise<CommandResult> {
