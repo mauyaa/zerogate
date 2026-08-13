@@ -68,16 +68,41 @@ export default function LimitsPage() {
 
       <h2>What is actually verified</h2>
       <p>
-        The repository&apos;s test suite runs the whole engine against a real HTTP service over real
-        sockets — connections dropped after the write commits, concurrent edits arriving between
-        verification and compensation, providers that cannot explain what happened, and idempotency
-        keys replayed with a different payload. Those paths are covered by tests, not by assertion on
-        this page.
+        These are covered by tests in the repository, not by assertion on this page.
       </p>
+      <ul>
+        <li>
+          <strong>Real sockets.</strong> Connections destroyed mid-write after the change commits, so
+          a lost acknowledgement is genuinely lost.
+        </li>
+        <li>
+          <strong>Adversarial providers.</strong> One that reports success while writing nothing, one
+          that fabricates evidence for an operation that never committed, one that contradicts itself
+          between reads. No provider behaviour can produce a verified receipt unless authoritative
+          state genuinely matches the approved postcondition.
+        </li>
+        <li>
+          <strong>Contention and volume.</strong> Thirty-two transactions racing for one record and
+          two hundred running concurrently, asserting that the provider&apos;s write count equals the
+          engine&apos;s dispatch count — a duplicate effect would show up as a mismatch.
+        </li>
+        <li>
+          <strong>Clock skew.</strong> Approvals issued and consumed under clocks running ahead and
+          behind each other, including the exact expiry boundary and replay after a rewound clock.
+        </li>
+        <li>
+          <strong>A structurally opposite provider.</strong> An append-only ledger with no conditional
+          write and compensation by reversing entry, driven by the same engine unchanged.
+        </li>
+      </ul>
+
+      <h2>What is still not verified</h2>
       <p>
-        What is not covered: sustained production load, adversarial providers, clock skew across
-        distributed signers, and every provider API that is not the one in the examples. Read the{" "}
-        <Link href="/docs/state-model">state model</Link> before depending on any specific ending.
+        <strong>Time in production.</strong> No amount of testing substitutes for months of real
+        traffic. This is a 0.x release and deserves to be treated as one. Beyond that: provider APIs
+        that differ from both shapes covered above, crash recovery mid-transaction, and approval state
+        shared across nodes. Read the <Link href="/docs/state-model">state model</Link> before
+        depending on any specific ending.
       </p>
     </DocPage>
   );

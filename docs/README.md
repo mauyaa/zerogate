@@ -221,6 +221,19 @@ npx zerogate keys new [--out <dir>] [--name <name>]
 - **The default ledger does not survive a restart.**
 - **Ephemeral signing keys make receipts unverifiable later.**
 
-What is verified: the test suite runs the whole engine against a real HTTP service over real sockets — connections dropped after the write commits, concurrent edits between verification and compensation, providers that cannot explain themselves, and idempotency keys replayed with a different payload.
+### What is actually verified
 
-What is not: sustained production load, adversarial providers, clock skew across distributed signers, and every provider API other than the example.
+The suite runs the whole engine against real providers, not stand-ins for them:
+
+- **Real sockets.** The example service is a real HTTP server. Connections are destroyed mid-write after the change commits, so a lost acknowledgement is genuinely lost.
+- **Adversarial providers.** A provider that reports success while writing nothing, one that fabricates evidence for an operation that never committed, one that contradicts itself between reads, and one that reverts the effect after verification. The invariant asserted throughout: no provider behaviour can produce a `VERIFIED_COMMITTED` receipt unless authoritative state genuinely matches the approved postcondition.
+- **Contention and volume.** Thirty-two transactions racing for one record, and two hundred running concurrently, asserting arithmetically that the provider's write count equals the engine's dispatch count — a duplicate effect would show up as a mismatch. Ledger chains stay intact and per-transaction sequences stay contiguous under interleaving.
+- **Clock skew.** Approvals issued and consumed under clocks running ahead and behind each other, including the exact expiry boundary, replay after a rewound clock, and a ledger receiving out-of-order timestamps.
+- **A structurally opposite provider.** An append-only ledger with no conditional write, no in-place update, evidence discoverable only by search, and compensation by reversing entry rather than restored field — driven by the same engine with no changes.
+
+### What is still not verified
+
+- **Time in production.** No amount of testing substitutes for running under real traffic for months. This is a 0.x release and should be treated as one.
+- **Provider APIs beyond these shapes.** Two shapes are covered. Yours may differ in ways neither anticipates.
+- **Crash recovery.** A process killed mid-transaction leaves a durable event history and no automatic continuation; nothing resumes it for you.
+- **Multi-node approval state.** Replay protection is process-local, as noted above.
