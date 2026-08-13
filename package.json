@@ -1,6 +1,6 @@
 {
   "name": "zerogate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Find out what happened before retrying: verified execution, reconciliation, and signed receipts for side effects that leave your process",
   "keywords": [
     "idempotency",

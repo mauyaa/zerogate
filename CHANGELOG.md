@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0
+
+### Fixed
+
+- **The published type declarations no longer reference `node:crypto`.** `ReceiptSigner` and `ApprovalAuthority` exposed a `KeyObject` constructor parameter, which made their `.d.ts` files import a Node built-in. Any consumer compiling with `skipLibCheck: false` got `TS2307: Cannot find module 'node:crypto'` unless they separately installed `@types/node`. Both constructors now take a PKCS#8 PEM string, and no shipped declaration imports a Node built-in.
+
+### Changed
+
+- **Breaking:** `new ReceiptSigner(key)` and `new ApprovalAuthority(key)` take a PEM `string` instead of a `KeyObject`. `ReceiptSigner.fromPem()` and `ApprovalAuthority.fromPem()` are unchanged and remain the recommended way to supply a retained key.
+
+### Added
+
+- Tests closing the four gaps the limits pages previously listed as unverified: adversarial providers that lie or fabricate evidence, contention and volume, clock skew between issuer and consumer, and a structurally opposite append-only provider. 65 tests, up from 43.
+
 ## 0.3.0
 
 First release published to npm, and the first release with a general-purpose API.

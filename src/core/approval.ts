@@ -41,20 +41,27 @@ export class ApprovalAuthority {
   readonly #usedNonces = new Set<string>();
   public readonly keyId: string;
 
-  public constructor(privateKey?: KeyObject) {
-    if (privateKey === undefined) {
+  /**
+   * Takes a PKCS#8 PEM rather than a `KeyObject` so the published type
+   * declarations stay free of `node:crypto`. That keeps this package usable
+   * with `skipLibCheck: false` and without `@types/node`.
+   */
+  public constructor(privateKeyPem?: string) {
+    if (privateKeyPem === undefined) {
       const pair = generateKeyPairSync("ed25519");
       this.#privateKey = pair.privateKey;
       this.#publicKey = pair.publicKey;
     } else {
+      const privateKey = createPrivateKey(privateKeyPem);
       this.#privateKey = privateKey;
       this.#publicKey = createPublicKey(privateKey);
     }
     this.keyId = `ed25519:${sha256(this.publicKeyPem()).slice(0, 24)}`;
   }
 
+  /** Build an authority from a retained key shared across processes. */
   public static fromPem(privateKeyPem: string): ApprovalAuthority {
-    return new ApprovalAuthority(createPrivateKey(privateKeyPem));
+    return new ApprovalAuthority(privateKeyPem);
   }
 
   public publicKeyPem(): string {

@@ -15,20 +15,30 @@ export class ReceiptSigner {
   readonly #publicKey: KeyObject;
   public readonly keyId: string;
 
-  public constructor(privateKey?: KeyObject) {
-    if (privateKey === undefined) {
+  /**
+   * Takes a PKCS#8 PEM rather than a `KeyObject` so the published type
+   * declarations stay free of `node:crypto`. That keeps this package usable
+   * with `skipLibCheck: false` and without `@types/node`.
+   *
+   * Omit the key to generate an ephemeral one, which is fine for tests and
+   * useless for audit — see {@link fromPem}.
+   */
+  public constructor(privateKeyPem?: string) {
+    if (privateKeyPem === undefined) {
       const pair = generateKeyPairSync("ed25519");
       this.#privateKey = pair.privateKey;
       this.#publicKey = pair.publicKey;
     } else {
+      const privateKey = createPrivateKey(privateKeyPem);
       this.#privateKey = privateKey;
       this.#publicKey = createPublicKey(privateKey);
     }
     this.keyId = `ed25519:${sha256(this.publicKeyPem()).slice(0, 24)}`;
   }
 
+  /** Build a signer from a retained key, so receipts stay verifiable later. */
   public static fromPem(privateKeyPem: string): ReceiptSigner {
-    return new ReceiptSigner(createPrivateKey(privateKeyPem));
+    return new ReceiptSigner(privateKeyPem);
   }
 
   public publicKeyPem(): string {
