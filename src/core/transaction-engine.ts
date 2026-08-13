@@ -425,6 +425,17 @@ export class TransactionEngine<
     const witnessEvidence: WitnessSummary | null =
       evaluated === undefined ? null : witnessSummary(evaluated);
 
+    // `EffectAdapter` is a public interface, so a third-party adapter can
+    // return neither a preview nor a rejection. That breaks its contract — but
+    // the caller still gets an outcome and a receipt, not a bare throw.
+    if (evaluated === undefined && preflightRejection === undefined) {
+      preflightRejection = new ZeroGateError(
+        "ADAPTER_FAILED",
+        `Adapter '${this.adapter.operation}' returned neither a preview nor a rejection`,
+        false
+      );
+    }
+
     const finish = (): Promise<TransactionResult> =>
       this.finishResult({
         transaction,
@@ -512,7 +523,7 @@ export class TransactionEngine<
     }
 
     if (evaluated === undefined) {
-      // Unreachable: a preflight that produced no preview always set a rejection.
+      // Unreachable: the guard above turned this into a rejection that returned.
       throw new Error("Preflight produced neither a preview nor a rejection");
     }
     const preflight: TPreflight = evaluated;
@@ -770,15 +781,27 @@ export class TransactionEngine<
         await transitionAction("REPORTED_SUCCEEDED", "Reconciliation proved the provider committed once");
         await transitionTransaction("VERIFYING", "Reconciled effect requires postcondition verification");
       } else {
-        await transitionAction("PROVIDER_REJECTED", "Provider definitively rejected the request");
-        await transitionTransaction("FAILURE_DETECTED", "Provider rejected the required action");
+        // Both endings mean nothing committed, and they mean it for opposite
+        // reasons. An operator sent looking for a provider-side rejection that
+        // never happened has been misled by the receipt.
+        const neverReachedProvider = error.code === "PROVIDER_SAFE_TO_RETRY";
+        await transitionAction(
+          "PROVIDER_REJECTED",
+          neverReachedProvider
+            ? "The request was never dispatched to the provider"
+            : "Provider definitively rejected the request"
+        );
+        await transitionTransaction("FAILURE_DETECTED", "The required action did not commit");
         actionFinality = "VERIFIED";
         manualRecovery.push({
           actionId,
           reason: errorMessage(error),
-          instruction:
-            `The provider rejected the request outright, so nothing committed and there is ` +
-            `nothing to undo. Fix the cause and run a fresh transaction against ${resourceLabel}.`
+          instruction: neverReachedProvider
+            ? `The request never reached the provider, so nothing committed and there is ` +
+              `nothing to undo. ${resourceLabel} is untouched; run a fresh transaction once the ` +
+              `provider is reachable.`
+            : `The provider rejected the request outright, so nothing committed and there is ` +
+              `nothing to undo. Fix the cause and run a fresh transaction against ${resourceLabel}.`
         });
         await transitionTransaction("MANUAL_RECOVERY_REQUIRED", "No committed effect to compensate");
         return finish();
@@ -1247,7 +1270,9 @@ function buildRecovery(input: {
     // A definitive provider rejection is the one unresolved outcome where
     // nothing can have landed.
     effectMayHaveCommitted: input.action.state !== "PROVIDER_REJECTED",
-    ...(materialFields === undefined
+    // `every` on an empty list answers "yes" from nothing compared, which is
+    // the strongest of the three answers and the least earned. Stay silent.
+    ...(materialFields === undefined || materialFields.length === 0
       ? {}
       : {
           observedMatchesExpected: materialFields.every((field) => field.matchesExpected === true)

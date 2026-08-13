@@ -36,6 +36,15 @@ export interface DispatchOutcome {
  */
 export type DispatchResult = DispatchOutcome | void;
 
+/**
+ * Why an effect that declares no `compensate` is never auto-undone.
+ *
+ * Shared rather than written twice: `zerogate/testing` reports this case as a
+ * declared choice instead of a failure, and it should not have to recognise it
+ * by matching a sentence that lives in another file.
+ */
+export const NO_COMPENSATION_DECLARED = "declares no compensating operation";
+
 /** Proof, from the provider, that one logical operation committed exactly once. */
 export interface CommitEvidence {
   providerRequestId?: string;
@@ -220,6 +229,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
    */
   const assertMaterialFieldsExist = (before: TState, expected: TState): void => {
     const observedKeys = Object.keys(before);
+    const expectedKeys = Object.keys(expected);
     const missing = materialFields.filter(
       (field) => !(field in (before as object)) && !(field in (expected as object))
     );
@@ -230,9 +240,10 @@ export function defineEffect<TInput, TState extends ProviderState>(
         `${missing.map((field) => `'${field}'`).join(", ")}, which ${
           missing.length > 1 ? "are" : "is"
         } absent from both the observed provider state and the expected result. ` +
-        `Observed fields: ${observedKeys.length === 0 ? "(none)" : observedKeys.join(", ")}.`,
+        `Observed fields: ${observedKeys.length === 0 ? "(none)" : observedKeys.join(", ")}. ` +
+        `Expected fields: ${expectedKeys.length === 0 ? "(none)" : expectedKeys.join(", ")}.`,
       false,
-      { missingFields: missing, observedFields: observedKeys }
+      { missingFields: missing, observedFields: observedKeys, expectedFields: expectedKeys }
     );
   };
 
@@ -436,7 +447,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
     },
 
     async dispatch(request): Promise<DispatchEvidence<DispatchOutcome["result"]>> {
-      const outcome = (await definition.dispatch({
+      const outcome: DispatchOutcome = (await definition.dispatch({
         input: request.preflight.input,
         before: request.preflight.before,
         expected: request.preflight.expected,
@@ -502,7 +513,7 @@ export function defineEffect<TInput, TState extends ProviderState>(
       if (definition.compensate === undefined) {
         return {
           safe: false,
-          reason: `Effect '${definition.operation}' declares no compensating operation`
+          reason: `Effect '${definition.operation}' ${NO_COMPENSATION_DECLARED}`
         };
       }
       const current = await observe(preflight.input);
@@ -545,11 +556,11 @@ export function defineEffect<TInput, TState extends ProviderState>(
       if (definition.compensate === undefined) {
         throw new ZeroGateError(
           "COMPENSATION_BLOCKED",
-          `Effect '${definition.operation}' declares no compensating operation`,
+          `Effect '${definition.operation}' ${NO_COMPENSATION_DECLARED}`,
           false
         );
       }
-      const outcome = (await definition.compensate({
+      const outcome: DispatchOutcome = (await definition.compensate({
         input: request.preflight.input,
         before: request.preflight.before,
         expected: request.preflight.expected,

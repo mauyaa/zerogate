@@ -71,8 +71,20 @@ async function verifyReceiptCommand(argv: readonly string[]): Promise<CommandRes
       event.data["receiptId"] === receipt.receiptId
   );
   if (receiptEventIndex < 0) {
+    // Same shape as the success path, so one parser reads either answer. The
+    // receipt is in hand; withholding what it says helps nobody.
     process.stdout.write(
-      `${JSON.stringify({ authentic: false, reason: "receipt-issued event is missing" }, null, 2)}\n`
+      `${JSON.stringify(
+        {
+          finalStatus: receipt.finalStatus,
+          finality: receipt.finality,
+          authentic: false,
+          transactionId: receipt.transactionId,
+          reason: "receipt-issued event is missing"
+        },
+        null,
+        2
+      )}\n`
     );
     return { exitCode: 1 };
   }
