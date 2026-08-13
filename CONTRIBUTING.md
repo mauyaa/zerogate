@@ -58,6 +58,21 @@ ZEROGATE_TEST_ADMIN_DATABASE_URL=postgresql://postgres:zerogate@127.0.0.1:5432/p
 
 New behaviour needs a test that would fail without it. For anything touching transaction semantics, that means a test against the example HTTP service in `examples/rest-resource` — a real server over a real socket, with the provider genuinely misbehaving. Do not add a test that stages an outcome by telling the engine which ending to perform; the previous version of this project did that, and it hid real defects.
 
+## Releasing
+
+Tagging is the whole process:
+
+```bash
+npm version minor          # or patch / major
+git push --follow-tags
+```
+
+The `release` workflow then validates both packages, runs the PostgreSQL proof against a real server, builds a source archive and the npm tarball, generates an SPDX SBOM, attests every artifact, and creates the GitHub release.
+
+It also publishes to npm **with a provenance attestation**, so the published tarball is cryptographically linked to the workflow run and commit that produced it. That step needs an `NPM_TOKEN` repository secret — an npm granular access token with publish rights to `zerogate`. Without the secret the step is skipped and the release is still produced, so nothing fails; you just publish nothing.
+
+Publishing from CI is preferred over a local `npm publish`, because a local publish carries no provenance.
+
 ## Pull requests
 
 Keep them small, and explain:

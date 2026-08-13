@@ -35,6 +35,8 @@ jobs:
     env:
       ZEROGATE_TEST_ADMIN_DATABASE_URL: postgresql://postgres:zerogate_release@127.0.0.1:5432/zerogate
       ZEROGATE_DATABASE_URL: postgresql://postgres:zerogate_release@127.0.0.1:5432/zerogate
+      # Job level, because a step's `if` cannot read that step's own `env`.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,6 +92,25 @@ jobs:
           path: release/
           if-no-files-found: error
           retention-days: 90
+      # Publishing from CI rather than a laptop means the tarball carries a
+      # provenance attestation linking it to this workflow and this commit, so
+      # anyone installing it can verify where it came from.
+      #
+      # Skipped cleanly when NPM_TOKEN is not configured, because a release
+      # workflow that always fails is worse than one that publishes nothing.
+      - name: Publish to npm with provenance
+        if: ${{ env.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm config set "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}"
+          npm publish --provenance --access public
+      - name: Note that npm publishing was skipped
+        if: ${{ env.NPM_TOKEN == '' }}
+        run: |
+          echo "::notice::NPM_TOKEN is not configured, so this release was not published to npm." \
+            "Add the secret to publish automatically on the next tag."
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

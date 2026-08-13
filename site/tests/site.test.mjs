@@ -141,11 +141,24 @@ test("typography and buttons follow the design system", async () => {
   }
   // `strong` and `b` default to 700 in every browser, so the ceiling only holds
   // if the stylesheet overrides them. This was rendering at 700 in production.
-  assert.match(
-    css,
-    /^strong,\s*\nb\s*\{[^}]*font-weight:\s*600/ms,
-    "strong/b must be pinned to 600 or the browser default of 700 leaks through"
+  // Matched by parsing rules rather than exact formatting, so reformatting the
+  // stylesheet cannot silently disable this check.
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...withoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
+    ([, selector, body]) => ({
+      selectors: selector.split(",").map((part) => part.trim()),
+      body,
+    })
   );
+  for (const element of ["strong", "b"]) {
+    const pinned = rules.some(
+      (rule) => rule.selectors.includes(element) && /font-weight:\s*600\b/.test(rule.body)
+    );
+    assert.ok(
+      pinned,
+      `${element} must be pinned to weight 600 or the browser default of 700 leaks through`
+    );
+  }
   // Section-head eyebrows must keep their own size: a bare `.section-head p`
   // rule out-specifies `.eyebrow` and silently rendered it at body size.
   assert.match(
