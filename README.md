@@ -6,6 +6,8 @@ Your code sends a request. The connection drops. You now have two choices, and b
 
 ZeroGate refuses that choice. It treats a lost answer as `OUTCOME_UNKNOWN`, asks the provider what actually landed, verifies against authoritative state, and signs a receipt you can check without trusting the process that produced it.
 
+**[usezerogate.vercel.app](https://usezerogate.vercel.app)** · [Documentation](docs/README.md) · [Limits](#limits)
+
 ```bash
 npm install zerogate
 ```
