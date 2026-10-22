@@ -13,6 +13,8 @@ One page, because a reference split across seven files drifts out of sync with i
 - [CLI](#cli)
 - [Limits](#limits)
 
+Why it is built this way: [architecture decisions](decisions/README.md).
+
 ---
 
 ## Concepts
