@@ -16,7 +16,7 @@
     "validate": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
-    "next": "16.4.2",
+    "next": "16.4.3",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
