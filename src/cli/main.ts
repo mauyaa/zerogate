@@ -40,7 +40,7 @@ function fail(message: string): never {
 
 function packageVersion(): string {
   try {
-    const manifest = require("../../package.json") as { version?: unknown };
+    const manifest = require("../../../package.json") as { version?: unknown };
     return typeof manifest.version === "string" ? manifest.version : "unknown";
   } catch {
     return "unknown";

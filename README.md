@@ -6,7 +6,7 @@ Your code sends a request. The connection drops. You now have two choices, and b
 
 ZeroGate refuses that choice. It treats a lost answer as `OUTCOME_UNKNOWN`, asks the provider what actually landed, verifies against authoritative state, and signs a receipt you can check without trusting the process that produced it.
 
-**[usezerogate.vercel.app](https://usezerogate.vercel.app)** · [Documentation](docs/README.md) · [Limits](#limits)
+**[zerogate-ashy.vercel.app](https://zerogate-ashy.vercel.app)** · [Documentation](docs/README.md) · [Limits](#limits)
 
 ```bash
 npm install zerogate
@@ -30,6 +30,18 @@ result.summary;                  // one line, safe to log, true in every outcome
 ```
 
 **Check `result.committed`.** Every other outcome — including the ones that mean *we cannot tell whether this happened* — returns normally rather than throwing. If you would rather handle one exception, call `assertCommitted(result)`.
+
+## Run the complete example
+
+From a checkout of this repository, on Node 22.13 or newer:
+
+```bash
+npm ci
+npm run example
+node bin/zerogate.js receipt verify .scratch/example/receipt.json .scratch/example/events.json .scratch/example/public-key.pem
+```
+
+The example starts a real local HTTP provider, publishes a document, deliberately loses the response, and reconciles it without a second write. It saves the event history to SQLite, reopens and verifies it, and exports a receipt for the independent CLI check. No external account or credentials are needed.
 
 ## What you get
 
@@ -189,7 +201,17 @@ const engine = new TransactionEngine({
 });
 ```
 
-`SqliteLedger` is also exported for single-process durability. Apply the PostgreSQL schema from [`migrations/`](migrations) — in this repo, `npm run db:up && npm run db:migrate`.
+For single-process durability, use a SQLite ledger (Node 22.13 or newer):
+
+```ts
+import { SqliteLedger, TransactionEngine } from "zerogate";
+
+const ledger = new SqliteLedger(".zerogate/events.sqlite");
+const engine = new TransactionEngine({ adapter: publishDocument, ledger });
+// After all runs finish, release the file handle with await ledger.close().
+```
+
+SQLite commits each event atomically and checks the stored chain on reopen. This retains audit history; it does not resume interrupted transactions. Apply the PostgreSQL schema from [`migrations/`](migrations) — in this repo, `npm run db:up && npm run db:migrate`.
 
 ## Signing keys
 

@@ -47,7 +47,7 @@ export class KeyStore {
 
     if (this.#keyDir) {
       mkdirSync(this.#keyDir, { recursive: true });
-      writeFileSync(join(this.#keyDir, `${name}.pem`), privPem, "utf-8");
+      writeFileSync(join(this.#keyDir, `${name}.pem`), privPem, { encoding: "utf-8", mode: 0o600, flag: "wx" });
       writeFileSync(join(this.#keyDir, `${name}.pub.pem`), pubPem, "utf-8");
     }
 

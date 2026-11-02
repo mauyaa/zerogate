@@ -20,6 +20,12 @@ A developer-experience release. The engine's guarantees did not change; what cha
 
 ### Fixed
 
+- The installed CLI reports the actual package version. New retained private keys are created with owner-only permissions.
+
+- `SqliteLedger` now stores events in a real SQLite database and implements the engine's `EventLedger` interface. Appends commit atomically, retained event chains are validated on reopen, and failed/conflicting appends roll back. The previous JSON-lines implementation was not usable as an engine ledger. Use a new `.sqlite` file; old JSON-lines files are not SQLite databases.
+- The hosted quickstart now supplies explicit input/state types and returns compensation evidence in the required shape. Both hosted snippets are compiled in the documentation test.
+- Site builds use webpack, matching the locally verified production build path.
+
 - **A request that never reached the provider was described as one the provider rejected.** `ProviderSafeToRetryError` and a genuine rejection both mean nothing committed, for opposite reasons, and the receipt said the wrong one — sending an operator to look for a provider-side rejection that never happened. The two now read differently.
 - **An adapter returning neither a preview nor a rejection threw an untyped error with no receipt.** `EffectAdapter` is a public interface, so that is a contract a third party can break; it is now recorded as an `ADAPTER_FAILED` refusal like any other pre-dispatch outcome.
 - `observedMatchesExpected` no longer reports `true` when no field was compared. `every` on an empty list answers yes from nothing, which is the strongest of the three answers and the least earned.
@@ -33,6 +39,8 @@ A developer-experience release. The engine's guarantees did not change; what cha
 - Compensation that would have to remove a field it created is refused with an explanation, rather than failing to canonicalise `undefined`.
 
 ### Changed
+
+- Minimum Node.js version is 22.13.0, including built-in SQLite support without a runtime flag. `SqliteLedger.append()` now follows `EventLedger` and returns a promise; use `list`, `chainRoot`, `verify`, and `close` instead of the old standalone JSON-lines API.
 
 - **`run()` no longer throws for provider or definition faults.** An unreachable provider, a credential caught by the evidence guard, or an effect that throws during `observe` now end as `PREFLIGHT_FAILED` with a signed receipt and `result.refusal`, instead of escaping as an exception with no record. Faults in the engine or its ledger still throw, because they are not outcomes of your effect. **This is a behaviour change**: code that relied on `run()` rejecting must check `result.committed`.
 - `dispatch` and `compensate` may return nothing; `findEvidence` may return `null` as well as `undefined`. All three matched what real provider clients already do and previously did not typecheck.

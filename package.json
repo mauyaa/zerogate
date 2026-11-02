@@ -19,13 +19,13 @@
     "type": "git",
     "url": "git+https://github.com/mauyaa/zerogate.git"
   },
-  "homepage": "https://usezerogate.vercel.app",
+  "homepage": "https://zerogate-ashy.vercel.app",
   "bugs": {
     "url": "https://github.com/mauyaa/zerogate/issues"
   },
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "exports": {
     ".": {
@@ -68,7 +68,8 @@
     "db:migrate": "node scripts/migrate.mjs",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build && npm run smoke",
     "smoke": "node scripts/smoke-package.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "example": "tsc -p tsconfig.json && node dist/examples/rest-resource/run.js"
   },
   "peerDependencies": {
     "pg": "8.16.0"

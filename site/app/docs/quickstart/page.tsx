@@ -13,7 +13,10 @@ const INSTALL = `npm install zerogate`;
 const DEFINE = `import { defineEffect, ProviderTimeoutAfterDispatchError } from "zerogate";
 import contract from "./publish.effect.json" with { type: "json" };
 
-export const publishDocument = defineEffect({
+type PublishInput = { documentId: string; status: string; tags: string[] };
+type Document = { status: string; tags: string[]; version: number; updatedAt: string };
+
+export const publishDocument = defineEffect<PublishInput, Document>({
   operation: "docs.publish",
   contract,                              // its digest is recorded in every receipt
   materialFields: ["status", "tags"],    // the only fields this effect owns
@@ -47,14 +50,16 @@ export const publishDocument = defineEffect({
   findEvidence: ({ logicalOperationId }) => api.findOperation(logicalOperationId),
 
   // Omit this to make the effect non-compensatable. It will never be auto-undone.
-  compensate: ({ input, restore, logicalOperationId }) =>
-    api.patchDocument(input.documentId, {
+  async compensate({ input, restore, logicalOperationId }) {
+    const response = await api.patchDocument(input.documentId, {
       idempotencyKey: logicalOperationId,
       body: restore
-    })
+    });
+    return { providerRequestId: response.requestId };
+  }
 });`;
 
-const RUN = `import { TransactionEngine } from "zerogate";
+const RUN = `import { TransactionEngine, assertCommitted } from "zerogate";
 import { publishDocument } from "./publish-document.js";
 
 const engine = new TransactionEngine({ adapter: publishDocument });
@@ -69,6 +74,7 @@ const result = await engine.run({
   finalize: () => notifySubscribers()
 });
 
+assertCommitted(result);                    // throws unless verified committed
 console.log(result.transaction.state);       // VERIFIED_COMMITTED
 console.log(result.forwardDispatchCount);    // 1, even if the answer was lost
 console.log(result.receipt.finality);        // VERIFIED`;
@@ -80,7 +86,7 @@ export default function QuickstartPage() {
     <DocPage
       current="/docs/quickstart"
       title="Quickstart"
-      lead="Install the package, describe one operation, and run it. Node 22 or newer; no other runtime dependencies."
+      lead="Install the package, describe one operation, and run it. Node 22.13 or newer; no other runtime dependencies."
     >
       <h2>1. Install</h2>
       <CodePanel filename="terminal" code={INSTALL} plain />
@@ -91,6 +97,8 @@ export default function QuickstartPage() {
         that carry the whole guarantee are <code>dispatch</code> and <code>findEvidence</code>.
       </p>
       <CodePanel filename="publish-document.ts" code={DEFINE} />
+      <p>Supply both type arguments: your input and the provider state. The <code>api</code> object
+        is your provider client; the contract is your operation’s JSON contract.</p>
 
       <Callout title="Never guess in dispatch.">
         <p>

@@ -89,7 +89,7 @@ export {
   type EventLedger
 } from "./core/event-ledger.js";
 
-export { SqliteLedger, type SqliteLedgerAppendResult } from "./core/sqlite-ledger.js";
+export { SqliteLedger } from "./core/sqlite-ledger.js";
 
 export {
   ApprovalAuthority,

@@ -21,7 +21,7 @@ Runs ESLint, strict TypeScript, the production build, and the content guards in 
 
 ## Deploy
 
-Vercel builds `main` on push. `next build` is the only step; there is nothing to configure.
+Vercel builds `main` on push. `next build --webpack` is the build step; there is nothing to configure.
 
 The production origin is resolved at build time from `VERCEL_PROJECT_PRODUCTION_URL`, falling back to `NEXT_PUBLIC_SITE_ORIGIN` if you set one. No domain is hardcoded, so preview deployments describe themselves correctly.
 

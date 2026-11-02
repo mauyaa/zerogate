@@ -24,7 +24,7 @@ const rootPath = fileURLToPath(root);
 const importRoot = rootPath.replaceAll("\\", "/");
 const scratch = new URL(".scratch/docs-snippets/", root);
 
-const SOURCES = ["README.md", "docs/README.md"];
+const SOURCES = ["README.md", "docs/README.md", "site/app/docs/quickstart/page.tsx"];
 
 /** Snippets import the package by name; here it is still source. */
 function resolveImports(snippet: string): string {
@@ -34,7 +34,7 @@ function resolveImports(snippet: string): string {
     .replaceAll(/from "zerogate"/g, `from "${importRoot}src/index.js"`)
     // The contract is a JSON import in the real examples and a global here.
     .replaceAll(/^import contract from .*$/gm, "")
-    .replaceAll(/^import .* from "\.\/.*"$/gm, "");
+    .replaceAll(/^import .* from "\.\/.*";?$/gm, "");
 }
 
 function extractTypeScriptBlocks(markdown: string): string[] {
@@ -48,7 +48,9 @@ test("every TypeScript example in the documentation compiles", async () => {
   const files: string[] = [];
   for (const source of SOURCES) {
     const markdown = await readFile(new URL(source, root), "utf8");
-    const blocks = extractTypeScriptBlocks(markdown);
+    const blocks = source.endsWith(".tsx")
+      ? [...markdown.matchAll(/const (?:DEFINE|RUN) = `([\s\S]*?)`;/g)].map(([, body]) => body ?? "")
+      : extractTypeScriptBlocks(markdown);
     assert.ok(blocks.length > 0, `${source} has no TypeScript examples to check`);
     for (const [index, block] of blocks.entries()) {
       const name = `${source.replaceAll(/[/.]/g, "_")}_${index}.ts`;

@@ -202,6 +202,10 @@ console.log("ok");
     );
   }
 
+  const installedVersion = run(binShim, ["--version"], { cwd: workDir }).trim();
+  const manifestVersion = JSON.parse(run(process.execPath, ["-p", "JSON.stringify(require('./node_modules/zerogate/package.json'))"], { cwd: workDir })).version;
+  if (installedVersion !== manifestVersion) throw new Error(`CLI version ${installedVersion} does not match ${manifestVersion}`);
+
   const cliHelp = run(binShim, ["--help"], { cwd: workDir });
   if (!cliHelp.includes("zerogate receipt verify")) {
     throw new Error("the installed CLI did not print its usage");
@@ -225,7 +229,7 @@ console.log("ok");
         library: JSON.parse(libraryOutput.trim()),
         commonJsRequire: true,
         testingSubpath: true,
-        cli: { help: true, digest }
+        cli: { version: installedVersion, help: true, digest }
       },
       null,
       2

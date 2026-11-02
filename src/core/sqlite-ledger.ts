@@ -1,68 +1,98 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { hashCanonical, canonicalize } from "./canonical-json.js";
-import { ZeroGateError } from "./errors.js";
+import { InMemoryEventLedger, type AppendEventInput, type EventLedger } from "./event-ledger.js";
 import type { StoredLedgerEvent } from "./types.js";
 
-export interface SqliteLedgerAppendResult {
-  duplicate: boolean;
-  event: StoredLedgerEvent;
-  ledgerRoot: string;
+// Keep Node's optional SQLite types out of the public declaration files.
+interface SqliteDatabase {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    all(): { event: string }[];
+    run(...values: string[]): unknown;
+  };
+  close(): void;
 }
 
-export class SqliteLedger {
-  readonly #filePath: string;
-  readonly #events: StoredLedgerEvent[] = [];
-  readonly #seenIds = new Set<string>();
+/**
+ * A real SQLite-backed EventLedger for a single process. Each append is an
+ * atomic SQLite transaction around the shared event rules.
+ * Open a new instance to inspect retained events after a restart; interrupted
+ * transactions are not automatically resumed by the engine.
+ */
+export class SqliteLedger implements EventLedger {
+  public readonly tenantId = undefined;
+  readonly #database: SqliteDatabase;
+  #pending: Promise<unknown> = Promise.resolve();
 
   public constructor(filePath: string) {
-    this.#filePath = filePath;
-    this.#hydrate();
+    if (filePath !== ":memory:") mkdirSync(dirname(filePath), { recursive: true });
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+      DatabaseSync: new (path: string) => SqliteDatabase;
+    };
+    this.#database = new DatabaseSync(filePath);
+    try {
+      this.#database.exec(`
+        PRAGMA busy_timeout = 5000;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = FULL;
+        CREATE TABLE IF NOT EXISTS zerogate_events (
+          position INTEGER PRIMARY KEY,
+          id TEXT NOT NULL UNIQUE,
+          event TEXT NOT NULL
+        );
+      `);
+      this.#snapshot();
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
   }
 
-  #hydrate(): void {
-    if (existsSync(this.#filePath)) {
+  #snapshot(): InMemoryEventLedger {
+    const events = this.#database.prepare("SELECT event FROM zerogate_events ORDER BY position").all()
+      .map((row) => JSON.parse(row.event) as StoredLedgerEvent);
+    return new InMemoryEventLedger(events);
+  }
+
+  public append(input: AppendEventInput): Promise<StoredLedgerEvent> {
+    const ownedInput = structuredClone(input);
+    const operation = this.#pending.then(async () => {
+      this.#database.exec("BEGIN IMMEDIATE");
       try {
-        const raw = readFileSync(this.#filePath, "utf-8");
-        const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-        for (const line of lines) {
-          const evt = JSON.parse(line) as StoredLedgerEvent;
-          this.#events.push(evt);
-          this.#seenIds.add(evt.id);
-        }
-      } catch (err) {
-        console.error("Ledger hydration warning:", err);
+        const ledger = this.#snapshot();
+        const event = await ledger.append(ownedInput);
+        this.#database.prepare("INSERT OR IGNORE INTO zerogate_events (id, event) VALUES (?, ?)")
+          .run(event.id, JSON.stringify(event));
+        this.#database.exec("COMMIT");
+        return event;
+      } catch (error) {
+        this.#database.exec("ROLLBACK");
+        throw error;
       }
-    }
+    });
+    this.#pending = operation.catch(() => undefined);
+    return operation;
   }
 
-  public append(event: StoredLedgerEvent): SqliteLedgerAppendResult {
-    if (this.#seenIds.has(event.id)) {
-      const existing = this.#events.find((e) => e.id === event.id);
-      if (existing && canonicalize(existing) === canonicalize(event)) {
-        return { duplicate: true, event: existing, ledgerRoot: this.getChainRoot() };
-      }
-      throw new ZeroGateError("LEDGER_CONFLICT", "Event ID exists with different content", false);
-    }
-
-    this.#events.push(event);
-    this.#seenIds.add(event.id);
-
-    const dir = dirname(this.#filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    writeFileSync(this.#filePath, `${JSON.stringify(event)}\n`, { flag: "a", encoding: "utf-8" });
-
-    return { duplicate: false, event, ledgerRoot: this.getChainRoot() };
+  public async list(subject?: string): Promise<StoredLedgerEvent[]> {
+    await this.#pending;
+    return this.#snapshot().list(subject);
   }
 
-  public getChainRoot(): string {
-    return hashCanonical(this.#events.map((e) => e.id));
+  public async chainRoot(subject?: string): Promise<string> {
+    await this.#pending;
+    return this.#snapshot().chainRoot(subject);
   }
 
-  public getEvents(subjectId?: string): StoredLedgerEvent[] {
-    if (!subjectId) return [...this.#events];
-    return this.#events.filter((e) => e.subject === subjectId);
+  public async verify(): Promise<boolean> {
+    await this.#pending;
+    try { return await this.#snapshot().verify(); } catch { return false; }
+  }
+
+  /** Wait for queued appends before releasing the database handle. */
+  public async close(): Promise<void> {
+    await this.#pending;
+    this.#database.close();
   }
 }

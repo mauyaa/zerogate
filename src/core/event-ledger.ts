@@ -72,10 +72,31 @@ export function canonicalEventTime(value?: string): string {
   return parsed.toISOString();
 }
 
+function appendFingerprint(input: AppendEventInput): string {
+  return sha256(canonicalize({
+    source: input.source ?? "urn:zerogate",
+    type: input.type,
+    subject: input.subject,
+    time: input.time,
+    data: input.data,
+    ...(input.traceparent === undefined ? {} : { traceparent: input.traceparent }),
+    ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
+    ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId })
+  }));
+}
+
 export class InMemoryEventLedger implements EventLedger {
   public readonly tenantId = undefined;
   readonly #events: StoredLedgerEvent[] = [];
   readonly #appendFingerprints = new Map<string, string>();
+
+  public constructor(events: readonly StoredLedgerEvent[] = []) {
+    if (!verifyEventChain(events).valid) {
+      throw new ZeroGateError("LEDGER_INTEGRITY_FAILED", "Cannot open an invalid event chain", false);
+    }
+    this.#events.push(...structuredClone(events));
+    for (const event of events) this.#appendFingerprints.set(event.id, appendFingerprint(event));
+  }
 
   public async append(input: AppendEventInput): Promise<StoredLedgerEvent> {
     const eventId = input.id ?? randomUUID();
@@ -83,20 +104,9 @@ export class InMemoryEventLedger implements EventLedger {
     const source = input.source ?? "urn:zerogate";
     const time = canonicalEventTime(input.time ?? existing?.time);
     const data = structuredClone(input.data);
-    const appendFingerprint = sha256(
-      canonicalize({
-        source,
-        type: input.type,
-        subject: input.subject,
-        time,
-        data,
-        ...(input.traceparent === undefined ? {} : { traceparent: input.traceparent }),
-        ...(input.causationId === undefined ? {} : { causationId: input.causationId }),
-        ...(input.correlationId === undefined ? {} : { correlationId: input.correlationId })
-      })
-    );
+    const fingerprint = appendFingerprint({ ...input, source, time, data });
     if (existing !== undefined) {
-      if (this.#appendFingerprints.get(eventId) !== appendFingerprint) {
+      if (this.#appendFingerprints.get(eventId) !== fingerprint) {
         throw new ZeroGateError(
           "LEDGER_CONFLICT",
           `Event ID ${eventId} was reused with different content`,
@@ -136,7 +146,7 @@ export class InMemoryEventLedger implements EventLedger {
     const eventHash = sha256(`${previousHash}\n${canonicalize(publicEvent)}`);
     const event: StoredLedgerEvent = { ...publicEvent, previousHash, eventHash };
     this.#events.push(event);
-    this.#appendFingerprints.set(eventId, appendFingerprint);
+    this.#appendFingerprints.set(eventId, fingerprint);
     return structuredClone(event);
   }
 
