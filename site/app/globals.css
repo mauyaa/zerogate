@@ -938,3 +938,11 @@ td code {
     transition-duration: 0.01ms !important;
   }
 }
+
+.desktop-nav .github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+}
