@@ -41,6 +41,3 @@ verification/
 # Operating-system files
 .DS_Store
 Thumbs.db
-
-# local agent and editor tooling
-.claude/

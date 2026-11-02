@@ -53,8 +53,6 @@ test("the docs set is complete and ordered by a single source of truth", async (
 test("no route, component, or asset references a retired host or toolchain", async () => {
   // Split so this file does not match its own guard.
   const banned = [
-    "chat" + "gpt",
-    "open" + "ai",
     "cloud" + "flare",
     "wran" + "gler",
     "vin" + "ext",

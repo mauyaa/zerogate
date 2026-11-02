@@ -19,7 +19,7 @@ interface CredentialPattern {
 const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
   { kind: "PEM private key", pattern: /-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----/ },
   { kind: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}\b/ },
-  { kind: "OpenAI-style key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
+  { kind: "secret API key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/ },
   { kind: "npm token", pattern: /\bnpm_[A-Za-z0-9]{20,}\b/ },
   { kind: "AWS access key ID", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
   { kind: "Slack token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/ },
