@@ -20,4 +20,4 @@ The PostgreSQL ledger is a separate entry point, `zerogate/postgres`, with
 - Installing the core pulls in nothing else.
 - Canonical JSON and the ledgers are maintained here rather than borrowed,
   so they carry their own tests.
-- Node.js 22 or later is required for the built-in APIs used.
+- Node.js 22.13 or later is required for the built-in APIs used.

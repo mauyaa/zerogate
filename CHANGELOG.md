@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1
+
+- Ship the public API reference rather than maintainer architecture records in the npm tarball; the reference links to those records on GitHub.
+- Align all current setup instructions with Node 22.13, remove stale tool/output entries, and ignore local npm credentials and runtime databases.
+- Replace misleading package keywords and the site's blanket test-coverage claim with precise descriptions.
+- Refresh compatible lint-tool and Next.js patch releases while retaining the existing rules and verification gates.
+
 ## 0.5.0
 
 A developer-experience release. The engine's guarantees did not change; what changed is how much of the first hour is spent fighting the package instead of using it, and how much of a bad outcome you are handed rather than left to dig for.

@@ -1,6 +1,6 @@
 # ZeroGate site
 
-The public documentation surface for [`zerogate`](https://www.npmjs.com/package/zerogate): eleven static routes covering what the library guarantees, how to use it, and what it does not do.
+The public documentation surface for [`zerogate`](https://www.npmjs.com/package/zerogate): static routes covering what the library guarantees, how to use it, and what it does not do.
 
 Next.js App Router, deployed to Vercel. No database, no API routes, no runtime configuration, and no environment variables required.
 

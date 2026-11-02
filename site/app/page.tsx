@@ -308,7 +308,7 @@ export default function HomePage() {
             </a>
           </div>
           <p className="micro-caption">
-            Node 22 or newer · zero runtime dependencies · Apache-2.0
+            Node 22.13 or newer · zero runtime dependencies · Apache-2.0
           </p>
         </div>
       </section>

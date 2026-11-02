@@ -165,7 +165,7 @@ export function SiteFooter() {
       </div>
       <div className="footer-legal">
         <span>© 2026 mauyaa · Apache-2.0</span>
-        <span>Every claim on this site is covered by a test in the repository.</span>
+        <span>Source, tests, and limitations are public.</span>
       </div>
     </footer>
   );

@@ -241,7 +241,7 @@ Stated plainly, because a safety library that oversells itself is worse than non
 
 ## Development
 
-Node.js 22 or newer.
+Node.js 22.13 or newer.
 
 ```bash
 npm install

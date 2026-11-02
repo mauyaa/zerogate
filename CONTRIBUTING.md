@@ -30,7 +30,7 @@ These are the invariants the library exists to provide. A change that breaks one
 
 ## Local validation
 
-Node.js 22 or newer.
+Node.js 22.13 or newer.
 
 ```bash
 npm ci
@@ -56,7 +56,7 @@ ZEROGATE_TEST_ADMIN_DATABASE_URL=postgresql://postgres:zerogate@127.0.0.1:5432/p
 
 ## Tests
 
-New behaviour needs a test that would fail without it. For anything touching transaction semantics, that means a test against the example HTTP service in `examples/rest-resource` — a real server over a real socket, with the provider genuinely misbehaving. Do not add a test that stages an outcome by telling the engine which ending to perform; the previous version of this project did that, and it hid real defects.
+New behaviour needs a test that would fail without it. For anything touching transaction semantics, that means a test against the example HTTP service in `examples/rest-resource` — a real server over a real socket, with the provider genuinely misbehaving. Do not add a test that stages an outcome by telling the engine which ending to perform.
 
 Two guards protect the parts of this project that are not code:
 
